@@ -75,6 +75,7 @@ function getInitialState(): StoreState {
       slotTimeStart: '08:00',
       slotTimeEnd: '10:00',
       estimatedQuantityQuintals: 65,
+      numberOfVehicles: 2,
       vehicleType: 'Tractor Trolley',
       vehicleNumber: 'RJ-20-EA-4122',
       status: 'called',
@@ -105,6 +106,7 @@ function getInitialState(): StoreState {
       slotTimeStart: '08:00',
       slotTimeEnd: '10:00',
       estimatedQuantityQuintals: 42,
+      numberOfVehicles: 1,
       vehicleType: 'Pickup Van',
       vehicleNumber: 'RJ-20-GA-9912',
       status: 'arrived',
@@ -135,6 +137,7 @@ function getInitialState(): StoreState {
       slotTimeStart: '10:00',
       slotTimeEnd: '12:00',
       estimatedQuantityQuintals: 110,
+      numberOfVehicles: 3,
       vehicleType: 'Truck',
       vehicleNumber: 'RJ-20-TR-1108',
       status: 'confirmed',
@@ -163,7 +166,7 @@ function getInitialState(): StoreState {
       farmerName: 'Rameshwar Dayal Patel',
       farmerPhone: '+91 98260 12345',
       commodityName: 'Wheat (FAQ Grade)',
-      estimatedQuantityQuintals: 65,
+      numberOfVehicles: 2,
       vehicleNumber: 'RJ-20-EA-4122',
       currentStage: 'called_to_gate',
       priorityOrder: 1,
@@ -181,7 +184,7 @@ function getInitialState(): StoreState {
       farmerName: 'Suresh Chandra Meena',
       farmerPhone: '+91 94141 87654',
       commodityName: 'Mustard Seeds (High Oil)',
-      estimatedQuantityQuintals: 42,
+      numberOfVehicles: 1,
       vehicleNumber: 'RJ-20-GA-9912',
       currentStage: 'gate_passed',
       priorityOrder: 2,
@@ -198,7 +201,7 @@ function getInitialState(): StoreState {
       farmerName: 'Balram Singh Yadav',
       farmerPhone: '+91 97555 43210',
       commodityName: 'Wheat (FAQ Grade)',
-      estimatedQuantityQuintals: 110,
+      numberOfVehicles: 3,
       vehicleNumber: 'RJ-20-TR-1108',
       currentStage: 'waiting',
       priorityOrder: 3,
@@ -367,7 +370,7 @@ class LocalStore {
   public getBookingByNumberOrToken(query: string): Booking | undefined {
     const q = query.trim().toUpperCase()
     return this.state.bookings.find(
-      (b) => b.bookingNumber.toUpperCase() === q || b.tokenNumber.toUpperCase() === q
+      (b) => b.bookingNumber.toUpperCase() === q || b.tokenNumber?.toUpperCase() === q
     )
   }
 
@@ -408,6 +411,7 @@ class LocalStore {
     slotTimeStart: string
     slotTimeEnd: string
     estimatedQuantityQuintals: number
+    numberOfVehicles: number
     vehicleType: Booking['vehicleType']
     vehicleNumber: string
     notes?: string
@@ -428,7 +432,8 @@ class LocalStore {
       tokenNumber,
       farmerName: params.farmerName,
       commodity: commodity?.name || 'Agri Commodity',
-      quantity: params.estimatedQuantityQuintals,
+      estimatedQuantityQuintals: params.estimatedQuantityQuintals,
+      numberOfVehicles: params.numberOfVehicles,
       vehicle: params.vehicleNumber,
       centreId: params.centreId,
       date: params.slotDate,
@@ -448,6 +453,7 @@ class LocalStore {
       slotTimeStart: params.slotTimeStart,
       slotTimeEnd: params.slotTimeEnd,
       estimatedQuantityQuintals: params.estimatedQuantityQuintals,
+      numberOfVehicles: params.numberOfVehicles,
       vehicleType: params.vehicleType,
       vehicleNumber: params.vehicleNumber,
       status: 'confirmed',
@@ -468,7 +474,7 @@ class LocalStore {
       farmerName: params.farmerName,
       farmerPhone: params.farmerPhone,
       commodityName: commodity?.name || 'Crop',
-      estimatedQuantityQuintals: params.estimatedQuantityQuintals,
+      numberOfVehicles: params.numberOfVehicles,
       vehicleNumber: params.vehicleNumber,
       currentStage: 'waiting',
       priorityOrder,
@@ -548,7 +554,7 @@ class LocalStore {
       read: false,
       smsSent: true,
       createdAt: new Date().toISOString(),
-      metadata: { tokenNumber: booking.tokenNumber, bookingId: booking.id },
+      metadata: { tokenNumber: booking.tokenNumber ?? undefined, bookingId: booking.id },
     }
 
     const sms: SmsLogEntry = {
@@ -558,7 +564,7 @@ class LocalStore {
       message: `MANDI SETU: Gate Entry verified for Token ${booking.tokenNumber}. Current queue wait time ~${qe.estimatedWaitMinutes} mins.`,
       sentAt: new Date().toISOString(),
       status: 'DELIVERED',
-      tokenNumber: booking.tokenNumber,
+      tokenNumber: booking.tokenNumber ?? undefined,
     }
 
     this.state.notifications.unshift(notif)
@@ -721,7 +727,7 @@ class LocalStore {
       message: `MANDI SETU: Procurement Slip generated. Net: ${finalAcceptedQuintals} Qtl. Payable: ₹${totalPayableAmount.toLocaleString('en-IN')}. DBT Transfer initiated to Bank. Ref: ${paymentUtr}.`,
       sentAt: new Date().toISOString(),
       status: 'DELIVERED',
-      tokenNumber: booking.tokenNumber,
+      tokenNumber: booking.tokenNumber ?? undefined,
     }
 
     this.state.procurementRecords.unshift(record)

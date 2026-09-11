@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { useAuth } from '@/context/AuthContext'
 import { api } from '@/services/api'
 import type { ProcurementCentre } from '@/types/mandi.types'
@@ -28,13 +28,63 @@ export const SlotBookingWizard: React.FC<SlotBookingWizardProps> = ({
   const { user } = useAuth()
   const today = new Date().toISOString().split('T')[0]
 
-  const [centreId, setCentreId] = useState(preselectedCentreId || centres[0]?.id || '')
-  const [commodityId, setCommodityId] = useState(commodities[0]?.id || '')
-  const [slotDate] = useState(today)
+  const [centreId, setCentreId] = useState(
+    preselectedCentreId || centres[0]?.id || ''
+  )
+
+  const [commodityId, setCommodityId] = useState(
+    commodities[0]?.id || ''
+  )
+
+  const [slotDate, setSlotDate] = useState(today)
   const [selectedSlotId, setSelectedSlotId] = useState<string>('')
-  const [estimatedQuantity, setEstimatedQuantity] = useState<number>(50)
-  const [vehicleType, setVehicleType] = useState<Booking['vehicleType']>('Tractor Trolley')
-  const [vehicleNumber, setVehicleNumber] = useState('RJ-20-EA-4122')
+  const [liveSlots, setLiveSlots] = useState<TimeSlot[]>(slots)
+
+  useEffect(() => {
+  setLiveSlots(slots)
+}, [slots])
+
+useEffect(() => {
+  let active = true
+
+  const refreshSlots = async () => {
+    if (!centreId || !slotDate) return
+
+    try {
+      const freshSlots = await api.getSlots(centreId, slotDate)
+
+      if (active) {
+        setLiveSlots(freshSlots)
+      }
+    } catch (error) {
+      console.error('Failed to refresh time slots:', error)
+    }
+  }
+
+  refreshSlots()
+
+  const unsubscribe = api.subscribe(() => {
+    refreshSlots()
+  })
+
+  return () => {
+    active = false
+    unsubscribe()
+  }
+}, [centreId, slotDate])
+
+  // Estimated quantity in quintals
+  const [estimatedQuantity, setEstimatedQuantity] =
+    useState<number>(50)
+
+  const [numberOfVehicles, setNumberOfVehicles] = useState<number>(1)
+
+  const [vehicleType, setVehicleType] =
+    useState<Booking['vehicleType']>('Tractor Trolley')
+
+  const [vehicleNumber, setVehicleNumber] =
+    useState('RJ-20-EA-4122')
+
   const [notes, setNotes] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -53,14 +103,26 @@ export const SlotBookingWizard: React.FC<SlotBookingWizardProps> = ({
     }
   }, [commodities, commodityId])
 
-  // Available slots for selected centre
-  const availableSlots = slots.filter((s) => s.centreId === centreId && s.slotDate === slotDate)
+  const selectedCommodity = commodities.find(
+    (c) => c.id === commodityId
+  )
 
-  // Current selected commodity
-  const selectedCommodity = commodities.find((c) => c.id === commodityId)
-  const estimatedValueInr = selectedCommodity
-    ? Math.round(estimatedQuantity * selectedCommodity.mspPricePerQuintal)
-    : 0
+  // Available slots
+  const availableSlots = liveSlots.filter(
+  (s) => s.centreId === centreId && s.slotDate === slotDate
+)
+
+  const handleDateChange = (value: string) => {
+    setSlotDate(value)
+    setSelectedSlotId('')
+    setError(null)
+  }
+
+  // Estimated value at MSP
+  const estimatedMspValue =
+    selectedCommodity
+      ? estimatedQuantity * selectedCommodity.mspPricePerQuintal
+      : 0
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -70,24 +132,41 @@ export const SlotBookingWizard: React.FC<SlotBookingWizardProps> = ({
       setError('Please select a Mandi Procurement Centre.')
       return
     }
+
     if (!commodityId) {
       setError('Please select a crop commodity.')
       return
     }
+
     if (!vehicleNumber.trim()) {
       setError('Please enter a vehicle registration number.')
       return
     }
-    if (estimatedQuantity <= 0 || estimatedQuantity > 1000) {
-      setError('Estimated quantity must be between 1 and 1000 quintals.')
+
+    if (numberOfVehicles < 1 || numberOfVehicles > 10) {
+      setError('Number of vehicles must be between 1 and 10.')
       return
     }
 
-    const chosenSlot = availableSlots.find((s) => s.id === selectedSlotId) || availableSlots[0]
-    const startTime = chosenSlot?.startTime || '08:00'
-    const endTime = chosenSlot?.endTime || '10:00'
+    if (!Number.isFinite(estimatedQuantity) || estimatedQuantity <= 0) {
+      setError('Please enter an estimated quantity greater than 0 quintals.')
+      return
+    }
+
+    if (availableSlots.length === 0) {
+      setError('No time slots are available for the selected date.')
+      return
+    }
+
+    const chosenSlot =
+      availableSlots.find((s) => s.id === selectedSlotId) ||
+      availableSlots[0]
+
+    const startTime = chosenSlot.startTime
+    const endTime = chosenSlot.endTime
 
     setIsSubmitting(true)
+
     try {
       const booking = await api.createBooking({
         farmerId: user?.id || 'usr-farmer-ramesh',
@@ -99,14 +178,24 @@ export const SlotBookingWizard: React.FC<SlotBookingWizardProps> = ({
         slotTimeStart: startTime,
         slotTimeEnd: endTime,
         estimatedQuantityQuintals: estimatedQuantity,
+        numberOfVehicles,
+
         vehicleType,
-        vehicleNumber: vehicleNumber.trim().toUpperCase(),
+
+        vehicleNumber: vehicleNumber
+          .trim()
+          .toUpperCase(),
+
         notes: notes.trim() || undefined,
       })
 
       onBookingSuccess(booking)
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Failed to book slot'
+      const msg =
+        err instanceof Error
+          ? err.message
+          : 'Failed to book slot'
+
       setError(msg)
     } finally {
       setIsSubmitting(false)
@@ -115,20 +204,35 @@ export const SlotBookingWizard: React.FC<SlotBookingWizardProps> = ({
 
   return (
     <div className="max-w-xl mx-auto space-y-4 pb-24">
+
+      {/* Header */}
       <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
-        <h2 className="text-base font-bold text-slate-900">Procurement Slot Booking</h2>
+        <h2 className="text-base font-bold text-slate-900">
+          Procurement Slot Booking
+        </h2>
+
         <p className="text-xs text-slate-500 mt-0.5">
-          Select Mandi, crop variety, and vehicle to generate your confirmed gate token.
+          Select Mandi, crop commodity, quantity and vehicle
+          to generate your confirmed gate token.
         </p>
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-4">
+      <form
+        onSubmit={handleSubmit}
+        className="space-y-4"
+      >
+
         {/* Step 1: Mandi & Commodity */}
         <Card className="p-4 space-y-3.5 border-slate-200">
+
           <Select
             label="1. Select Mandi Procurement Centre"
             value={centreId}
-            onChange={(e) => setCentreId(e.target.value)}
+            onChange={(e) => {
+              setCentreId(e.target.value)
+              setSelectedSlotId('')
+              setError(null)
+            }}
             options={centres.map((c) => ({
               label: `${c.name} (${c.district}, ${c.state})`,
               value: c.id,
@@ -138,170 +242,315 @@ export const SlotBookingWizard: React.FC<SlotBookingWizardProps> = ({
           <Select
             label="2. Select Crop Commodity"
             value={commodityId}
-            onChange={(e) => setCommodityId(e.target.value)}
+            onChange={(e) =>
+              setCommodityId(e.target.value)
+            }
             options={commodities.map((c) => ({
-              label: `${c.name} — MSP ₹${c.mspPricePerQuintal}/Qtl`,
+              label: `${c.name} — MSP ₹${c.mspPricePerQuintal.toLocaleString('en-IN')}/Qtl`,
               value: c.id,
             }))}
           />
 
+          {/* Selected Commodity + MSP */}
           {selectedCommodity && (
-            <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-200 text-xs text-emerald-900 flex items-center justify-between">
-              <div>
-                <span className="font-bold">{selectedCommodity.name}</span>
-                <p className="text-[11px] text-emerald-700">
-                  Variety: {selectedCommodity.variety} • Max Moisture: {selectedCommodity.maxMoisturePercentage}%
-                </p>
-              </div>
-              <div className="text-right">
-                <span className="text-sm font-black font-mono">
-                  ₹{selectedCommodity.mspPricePerQuintal}
-                </span>
-                <span className="text-[10px] block text-emerald-600">per Quintal</span>
+            <div className="p-3.5 bg-emerald-50 rounded-xl border border-emerald-200">
+
+              <div className="flex items-center justify-between gap-3">
+
+                <div>
+                  <span className="text-sm font-bold text-emerald-900">
+                    {selectedCommodity.name}
+                  </span>
+
+                  <p className="text-[11px] text-emerald-700 mt-0.5">
+                    Variety: {selectedCommodity.variety || 'Standard'}
+                  </p>
+
+                  <p className="text-[11px] text-emerald-700">
+                    Max Moisture: {selectedCommodity.maxMoisturePercentage}%
+                  </p>
+                </div>
+
+                <div className="text-right">
+                  <span className="text-[10px] uppercase font-bold tracking-wider text-emerald-700">
+                    MSP
+                  </span>
+
+                  <div className="text-lg font-black font-mono text-emerald-900">
+                    ₹{selectedCommodity.mspPricePerQuintal.toLocaleString('en-IN')}
+                  </div>
+
+                  <span className="text-[10px] text-emerald-600">
+                    per Quintal
+                  </span>
+                </div>
+
               </div>
             </div>
           )}
+
         </Card>
 
-        {/* Step 2: Time Window */}
-        <Card className="p-4 border-slate-200">
-          <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-2">
-            3. Choose Time Window (Today: {slotDate})
-          </label>
+        {/* Step 2: Date & Time Window */}
+        <Card className="p-4 border-slate-200 space-y-4">
+          <div>
+            <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-2">
+              3. Select Booking Date
+            </label>
 
-          <div className="grid grid-cols-2 gap-2">
-            {availableSlots.map((slot) => {
-              const isSelected = selectedSlotId === slot.id || (!selectedSlotId && slot === availableSlots[0])
-              const remaining = slot.maxCapacityFarmers - slot.bookedCount
+            <Input
+              type="date"
+              value={slotDate}
+              min={today}
+              onChange={(e) => handleDateChange(e.target.value)}
+            />
 
-              return (
-                <button
-                  type="button"
-                  key={slot.id}
-                  onClick={() => setSelectedSlotId(slot.id)}
-                  className={`p-3 rounded-xl border text-left transition-all ${
-                    isSelected
-                      ? 'bg-emerald-800 text-white border-emerald-800 ring-2 ring-emerald-600/30'
-                      : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
-                  }`}
-                >
-                  <div className="flex items-center gap-1.5 text-xs font-bold">
-                    <Clock className="w-3.5 h-3.5" />
-                    <span>
-                      {slot.startTime} - {slot.endTime}
-                    </span>
-                  </div>
-                  <span
-                    className={`text-[10px] mt-1 block ${
-                      isSelected ? 'text-emerald-200' : 'text-slate-500'
-                    }`}
-                  >
-                    {remaining} gate slots open
-                  </span>
-                </button>
-              )
-            })}
+            <p className="text-[11px] text-slate-400 mt-1">
+              Select the date when your vehicle(s) will arrive at the Mandi.
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-2">
+              4. Choose Time Window
+            </label>
+
+            {availableSlots.length === 0 ? (
+              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 text-sm text-slate-500 text-center">
+                No time slots available for this Mandi on {slotDate}.
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-2">
+                {availableSlots.map((slot) => {
+                  const isSelected =
+                    selectedSlotId === slot.id ||
+                    (!selectedSlotId && slot === availableSlots[0])
+
+                  const remaining = Math.max(
+                    0,
+                    slot.maxCapacityFarmers - slot.bookedCount
+                  )
+
+                  const isFull = remaining <= 0
+
+                  return (
+                    <button
+                      type="button"
+                      key={slot.id}
+                      disabled={isFull}
+                      onClick={() => setSelectedSlotId(slot.id)}
+                      className={`p-3 rounded-xl border text-left transition-all ${
+                        isFull
+                          ? 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
+                          : isSelected
+                            ? 'bg-emerald-800 text-white border-emerald-800 ring-2 ring-emerald-600/30'
+                            : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5 text-xs font-bold">
+                        <Clock className="w-3.5 h-3.5" />
+                        <span>
+                          {slot.startTime} - {slot.endTime}
+                        </span>
+                      </div>
+
+                      <span
+                        className={`text-[10px] mt-1 block ${
+                          isFull
+                            ? 'text-slate-400'
+                            : isSelected
+                              ? 'text-emerald-200'
+                              : 'text-slate-500'
+                        }`}
+                      >
+                        {isFull ? 'Slot full' : `${remaining} gate slots open`}
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
+            )}
           </div>
         </Card>
 
-        {/* Step 3: Vehicle & Quantity */}
+        {/* Step 3: Quantity & Vehicle */}
         <Card className="p-4 space-y-3.5 border-slate-200">
+
+          {/* Estimated Quantity */}
+          <div>
+
+            <div className="flex items-center justify-between mb-1.5">
+
+              <label className="text-xs font-semibold uppercase tracking-wider text-slate-700">
+                5. Estimated Quantity (Quintals)
+              </label>
+
+              <span className="font-mono font-bold text-sm text-emerald-800">
+                {estimatedQuantity} Qtl
+              </span>
+
+            </div>
+
+            <Input
+              type="number"
+              min="0.01"
+              step="any"
+              value={estimatedQuantity || ''}
+              onChange={(e) => {
+                const value = e.target.value
+                setEstimatedQuantity(value === '' ? 0 : Number(value))
+              }}
+              placeholder="Enter estimated quantity in quintals"
+            />
+
+            <p className="text-[11px] text-slate-400 mt-1">
+              Enter the approximate quantity you plan to bring.
+            </p>
+
+          </div>
+
+          {/* Estimated MSP Value */}
+          {selectedCommodity && (
+            <div className="p-3.5 bg-slate-900 text-white rounded-xl">
+
+              <div className="flex items-center justify-between">
+
+                <div>
+                  <span className="text-[10px] uppercase font-bold tracking-wider text-emerald-400">
+                    Estimated Value at MSP
+                  </span>
+
+                  <p className="text-[11px] text-slate-300 mt-0.5">
+                    {estimatedQuantity} Qtl × ₹
+                    {selectedCommodity.mspPricePerQuintal.toLocaleString('en-IN')}
+                  </p>
+                </div>
+
+                <div className="text-right">
+                  <div className="text-lg font-black font-mono">
+                    ₹{estimatedMspValue.toLocaleString('en-IN')}
+                  </div>
+
+                  <span className="text-[10px] text-slate-400">
+                    Estimated only
+                  </span>
+                </div>
+
+              </div>
+
+            </div>
+          )}
+
+          {/* Vehicle Details */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+
             <Select
               label="Vehicle Type"
               value={vehicleType}
-              onChange={(e) => setVehicleType(e.target.value as Booking['vehicleType'])}
+              onChange={(e) =>
+                setVehicleType(
+                  e.target.value as Booking['vehicleType']
+                )
+              }
               options={[
-                { label: '🚜 Tractor Trolley', value: 'Tractor Trolley' },
-                { label: '🛻 Mini Truck / Pickup', value: 'Mini Truck' },
-                { label: '🚛 Heavy Truck', value: 'Truck' },
-                { label: '🐂 Bullock Cart', value: 'Bullock Cart' },
-                { label: '🚐 Pickup Van', value: 'Pickup Van' },
+                {
+                  label: '🚜 Tractor Trolley',
+                  value: 'Tractor Trolley',
+                },
+                {
+                  label: '🛻 Mini Truck / Pickup',
+                  value: 'Mini Truck',
+                },
+                {
+                  label: '🚛 Heavy Truck',
+                  value: 'Truck',
+                },
+                {
+                  label: '🐂 Bullock Cart',
+                  value: 'Bullock Cart',
+                },
+                {
+                  label: '🚐 Pickup Van',
+                  value: 'Pickup Van',
+                },
               ]}
             />
 
             <Input
-              label="Vehicle Reg. Number"
-              placeholder="e.g. RJ-20-EA-4122"
-              value={vehicleNumber}
-              onChange={(e) => setVehicleNumber(e.target.value)}
+              label="Number of Vehicles"
+              type="number"
+              min={1}
+              max={10}
+              value={numberOfVehicles}
+              onChange={(e) =>
+                setNumberOfVehicles(
+                  Math.max(1, Math.min(10, Number(e.target.value) || 1))
+                )
+              }
               leftIcon={<Truck className="w-4 h-4" />}
             />
-          </div>
 
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <label className="text-xs font-semibold uppercase tracking-wider text-slate-700">
-                Estimated Quantity (Quintals)
-              </label>
-              <span className="font-mono font-bold text-sm text-emerald-800">
-                {estimatedQuantity} Qtl (~{(estimatedQuantity * 100).toLocaleString('en-IN')} kg)
-              </span>
-            </div>
-
-            <input
-              type="range"
-              min="5"
-              max="250"
-              step="5"
-              value={estimatedQuantity}
-              onChange={(e) => setEstimatedQuantity(Number(e.target.value))}
-              className="w-full accent-emerald-700 cursor-pointer"
+            <Input
+              label="Vehicle Reg. Number" 
+              placeholder="e.g. RJ-20-EA-4122"
+              value={vehicleNumber}
+              onChange={(e) =>
+                setVehicleNumber(e.target.value)
+              }
+              leftIcon={
+                <Truck className="w-4 h-4" />
+              }
             />
-            <div className="flex justify-between text-[10px] text-slate-400 mt-1">
-              <span>5 Qtl</span>
-              <span>100 Qtl</span>
-              <span>250 Qtl</span>
-            </div>
+
           </div>
 
+          {/* Notes */}
           <Input
             label="Remarks / Notes (Optional)"
             placeholder="e.g. Driver contact, dry moisture grain"
             value={notes}
-            onChange={(e) => setNotes(e.target.value)}
+            onChange={(e) =>
+              setNotes(e.target.value)
+            }
           />
 
-          {/* Expected MSP Payout preview */}
-          <div className="p-3.5 bg-slate-900 text-white rounded-xl flex items-center justify-between">
-            <div>
-              <span className="text-[10px] uppercase font-bold tracking-wider text-emerald-400">
-                Estimated Govt MSP Value
-              </span>
-              <p className="text-xs text-slate-300 mt-0.5">
-                Direct to Bank A/C via PFMS/DBT
-              </p>
-            </div>
-            <div className="text-right font-mono">
-              <span className="text-lg font-black text-emerald-400">
-                ₹{estimatedValueInr.toLocaleString('en-IN')}
-              </span>
-            </div>
-          </div>
         </Card>
 
+        {/* Error */}
         {error && (
-          <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700">
+          <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-sm text-red-700">
             {error}
           </div>
         )}
 
-        {/* Action buttons */}
+        {/* Action Buttons */}
         <div className="flex gap-3 pt-2">
-          <Button type="button" variant="ghost" onClick={onCancel} className="w-1/3">
+
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={onCancel}
+            className="w-1/3"
+          >
             Cancel
           </Button>
+
           <Button
             type="submit"
             variant="primary"
             isLoading={isSubmitting}
-            leftIcon={<CheckCircle2 className="w-4 h-4" />}
+            leftIcon={
+              <CheckCircle2 className="w-4 h-4" />
+            }
             className="flex-1 text-sm font-bold shadow-md"
           >
             Confirm & Generate Token
           </Button>
+
         </div>
+
       </form>
+
     </div>
   )
 }
