@@ -471,6 +471,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
           email: email.trim().toLowerCase(),
           password,
           options: {
+		emailRedirectTo: `${window.location.origin}/`,
             data: {
               /*
                * SECURITY:
