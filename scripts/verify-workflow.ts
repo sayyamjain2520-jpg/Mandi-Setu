@@ -27,7 +27,7 @@ async function runVerification() {
     slotDate: new Date().toISOString().split('T')[0],
     slotTimeStart: '10:00',
     slotTimeEnd: '12:00',
-    estimatedQuantityQuintals: 75,
+    numberOfVehicles: 2,
     vehicleType: 'Tractor Trolley' as const,
     vehicleNumber: 'RJ-20-EA-9988',
     notes: 'Grain dried in sun, moisture below 11%',

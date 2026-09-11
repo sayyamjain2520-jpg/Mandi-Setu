@@ -31,14 +31,18 @@ export interface IDataService {
     slotTimeStart: string
     slotTimeEnd: string
     estimatedQuantityQuintals: number
+    numberOfVehicles: number
     vehicleType: Booking['vehicleType']
     vehicleNumber: string
     notes?: string
   }): Promise<Booking>
+    acceptBooking(bookingId: string): Promise<Booking>
+  rejectBooking(bookingId: string): Promise<void>
   getQueue(centreId?: string): Promise<QueueEntry[]>
   checkInAtGate(tokenOrBookingNumber: string): Promise<{ success: boolean; message: string; entry?: QueueEntry }>
   callNextInQueue(centreId: string): Promise<{ success: boolean; entry?: QueueEntry; message: string }>
   updateQueueStage(queueId: string, stage: QueueStage): Promise<void>
+  completeUnloading(bookingId: string): Promise<void>
   recordProcurement(params: {
     bookingId: string
     grossWeightKg: number
@@ -230,10 +234,17 @@ class DataService implements IDataService {
 
       const { data, error } = await query.order('created_at', { ascending: false })
 
+      console.log('BOOKINGS QUERY RESULT:', {
+  centreId,
+  data,
+  error,
+  count: data?.length,
+})
+
       if (error) {
-        console.error('Failed to load bookings from Supabase:', error)
-        return []
-      }
+  console.error('BOOKINGS SUPABASE ERROR:', error)
+  throw new Error(`Failed to load bookings: ${error.message}`)
+}
 
       if (!data || data.length === 0) return []
 
@@ -250,7 +261,8 @@ class DataService implements IDataService {
         slotDate: b.slot_date,
         slotTimeStart: b.slot_time_start,
         slotTimeEnd: b.slot_time_end,
-        estimatedQuantityQuintals: Number(b.estimated_quantity_quintals),
+        estimatedQuantityQuintals: Number(b.estimated_quantity_quintals) || 0,
+        numberOfVehicles: Number(b.number_of_vehicles),
         vehicleType: b.vehicle_type,
         vehicleNumber: b.vehicle_number,
         status: b.status,
@@ -265,36 +277,61 @@ class DataService implements IDataService {
     return localStore.getBookings(farmerId, centreId)
   }
 
-  public async getBookingById(id: string): Promise<Booking | undefined> {
-    if (this.isCloudMode() && supabase) {
-      const { data } = await supabase.from('bookings').select('*').eq('id', id).single()
-      if (data) {
-        return {
-          id: data.id,
-          bookingNumber: data.booking_number,
-          farmerId: data.farmer_id,
-          farmerName: 'Farmer',
-          farmerPhone: '',
-          centreId: data.centre_id,
-          centreName: 'Procurement Centre',
-          commodityId: data.commodity_id,
-          commodityName: 'Crop',
-          slotDate: data.slot_date,
-          slotTimeStart: data.slot_time_start,
-          slotTimeEnd: data.slot_time_end,
-          estimatedQuantityQuintals: Number(data.estimated_quantity_quintals),
-          vehicleType: data.vehicle_type,
-          vehicleNumber: data.vehicle_number,
-          status: data.status,
-          tokenNumber: data.token_number,
-          qrCodeData: data.qr_code_data,
-          notes: data.notes,
-          createdAt: data.created_at,
-          updatedAt: data.updated_at,
-        }
+      public async getBookingById(id: string): Promise<Booking | undefined> {
+    const client = supabase
+
+    if (this.isCloudMode() && client) {
+
+      const { data: sessionData } = await client.auth.getSession()
+
+      console.log(
+        'OPERATOR SESSION:',
+        sessionData.session?.user?.id,
+        sessionData.session?.user?.email
+      )
+
+      const { data, error } = await client
+        .from('bookings')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle()
+
+      if (error) {
+        console.error('Failed to load booking by ID:', error)
+        throw new Error(`Failed to load booking: ${error.message}`)
+      }
+
+      if (!data) {
+        console.error('Booking not found for ID:', id)
+        return undefined
+      }
+
+      return {
+        id: data.id,
+        bookingNumber: data.booking_number,
+        farmerId: data.farmer_id,
+        farmerName: 'Farmer',
+        farmerPhone: '',
+        centreId: data.centre_id,
+        centreName: 'Procurement Centre',
+        commodityId: data.commodity_id,
+        commodityName: 'Crop',
+        slotDate: data.slot_date,
+        slotTimeStart: data.slot_time_start,
+        slotTimeEnd: data.slot_time_end,
+        estimatedQuantityQuintals: Number(data.estimated_quantity_quintals) || 0,
+        numberOfVehicles: Number(data.number_of_vehicles),
+        vehicleType: data.vehicle_type,
+        vehicleNumber: data.vehicle_number,
+        status: data.status,
+        tokenNumber: data.token_number,
+        qrCodeData: data.qr_code_data,
+        notes: data.notes,
+        createdAt: data.created_at,
+        updatedAt: data.updated_at,
       }
     }
-    if (this.isCloudMode() && supabase) return undefined
+
     return localStore.getBookingById(id)
   }
 
@@ -320,7 +357,8 @@ class DataService implements IDataService {
           slotDate: data.slot_date,
           slotTimeStart: data.slot_time_start,
           slotTimeEnd: data.slot_time_end,
-          estimatedQuantityQuintals: Number(data.estimated_quantity_quintals),
+          estimatedQuantityQuintals: Number(data.estimated_quantity_quintals) || 0,
+          numberOfVehicles: Number(data.number_of_vehicles),
           vehicleType: data.vehicle_type,
           vehicleNumber: data.vehicle_number,
           status: data.status,
@@ -337,84 +375,52 @@ class DataService implements IDataService {
   }
 
     public async createBooking(params: {
-    farmerId: string
-    farmerName: string
-    farmerPhone: string
-    centreId: string
-    commodityId: string
-    slotDate: string
-    slotTimeStart: string
-    slotTimeEnd: string
-    estimatedQuantityQuintals: number
-    vehicleType: Booking['vehicleType']
-    vehicleNumber: string
-    notes?: string
-  }): Promise<Booking> {
+  farmerId: string
+  farmerName: string
+  farmerPhone: string
+  centreId: string
+  commodityId: string
+  slotDate: string
+  slotTimeStart: string
+  slotTimeEnd: string
+  estimatedQuantityQuintals: number
+  numberOfVehicles: number
+  vehicleType: Booking['vehicleType']
+  vehicleNumber: string
+  notes?: string
+}): Promise<Booking> {
     const client = supabase
 
     if (this.isCloudMode() && client) {
 
-      // 1. Find the selected time slot
+      // 1. Verify that the selected time slot exists
       const { data: slotData, error: slotFetchError } = await client
         .from('time_slots')
-        .select('id, booked_count, max_capacity_farmers')
+        .select('id')
         .eq('centre_id', params.centreId)
         .eq('slot_date', params.slotDate)
         .eq('start_time', params.slotTimeStart)
         .eq('end_time', params.slotTimeEnd)
-        .single()
+        .maybeSingle()
 
       if (slotFetchError || !slotData) {
-        console.error('Failed to find selected time slot:', slotFetchError)
+        console.error(
+          'Failed to find selected time slot:',
+          slotFetchError
+        )
+
         throw new Error(
           'Selected time slot not found. Please select another slot.'
         )
       }
 
-      // 2. Check slot capacity
-      if (
-        Number(slotData.booked_count) >=
-        Number(slotData.max_capacity_farmers)
-      ) {
-        throw new Error(
-          'Selected time slot is full. Please choose another slot.'
-        )
-      }
-
-      // 3. Calculate token sequence
-      const { count: bookingCount, error: countError } = await client
-        .from('bookings')
-        .select('id', { count: 'exact', head: true })
-        .eq('centre_id', params.centreId)
-        .eq('slot_date', params.slotDate)
-
-      if (countError) {
-        console.error(
-          'Failed to calculate token sequence:',
-          countError
-        )
-      }
-
-      const tokenSeq = (bookingCount || 0) + 1
-      const tokenNumber = `T-${String(tokenSeq).padStart(3, '0')}`
-
+      // 2. Generate booking number
+      // Token will be generated only after operator accepts.
       const bookingNumber =
         `MS-2026-${Math.floor(1000 + Math.random() * 9000)}`
 
-      // 4. QR data
-      const qrData = JSON.stringify({
-        bookingNumber,
-        tokenNumber,
-        farmerName: params.farmerName,
-        quantity: params.estimatedQuantityQuintals,
-        vehicle: params.vehicleNumber,
-        centreId: params.centreId,
-        date: params.slotDate,
-        slotStart: params.slotTimeStart,
-        slotEnd: params.slotTimeEnd,
-      })
-
-      // 5. Create booking in Supabase
+      // 3. Create booking request as PENDING
+      // No token, no QR, no queue and no slot capacity update.
       const { data: bookingData, error: bErr } = await client
         .from('bookings')
         .insert({
@@ -425,13 +431,23 @@ class DataService implements IDataService {
           slot_date: params.slotDate,
           slot_time_start: params.slotTimeStart,
           slot_time_end: params.slotTimeEnd,
-          estimated_quantity_quintals:
-            params.estimatedQuantityQuintals,
+
+          // Farmer-entered estimated quantity
+          estimated_quantity_quintals: params.estimatedQuantityQuintals,
+
+          // Actual vehicle count
+          number_of_vehicles: params.numberOfVehicles,
+
           vehicle_type: params.vehicleType,
           vehicle_number: params.vehicleNumber,
-          status: 'confirmed',
-          token_number: tokenNumber,
-          qr_code_data: qrData,
+
+          // IMPORTANT: Operator must accept first
+          status: 'pending',
+
+          // Generated only after operator acceptance
+          token_number: null,
+          qr_code_data: null,
+
           notes: params.notes,
         })
         .select()
@@ -439,133 +455,20 @@ class DataService implements IDataService {
 
       if (bErr || !bookingData) {
         console.error(
-          'Failed to create booking:',
+          'Failed to create booking request:',
           bErr
         )
 
         throw new Error(
           bErr?.message ||
-          'Failed to create booking in Supabase'
+          'Failed to create booking request in Supabase'
         )
       }
 
-      // 6. Increase booked_count for selected slot
-      const newBookedCount =
-        Number(slotData.booked_count) + 1
-
-      const { data: updatedBookedCount, error: slotUpdateError } =
-  await client.rpc('change_slot_booked_count', {
-    p_slot_id: slotData.id,
-    p_delta: 1,
-  })
-
-      if (slotUpdateError) {
-        console.error(
-          'Failed to update slot capacity:',
-          slotUpdateError
-        )
-
-        // Rollback booking
-        await client
-          .from('bookings')
-          .delete()
-          .eq('id', bookingData.id)
-
-        throw new Error(
-          `Failed to update slot capacity: ${slotUpdateError.message}`
-        )
-      }
-
-      // 7. Calculate queue position
-      const { count: queueCount, error: queueCountError } =
-        await client
-          .from('queue_entries')
-          .select('id', {
-            count: 'exact',
-            head: true,
-          })
-          .eq('centre_id', params.centreId)
-          .in('current_stage', [
-            'waiting',
-            'gate_passed',
-          ])
-
-      if (queueCountError) {
-        console.error(
-          'Failed to calculate queue position:',
-          queueCountError
-        )
-      }
-
-      const priorityOrder =
-        (queueCount || 0) + 1
-
-      const estimatedWaitMinutes =
-        Math.max(10, priorityOrder * 12)
-
-      // 8. Create queue entry
-      const { error: queueInsertError } =
-        await client
-          .from('queue_entries')
-          .insert({
-            booking_id: bookingData.id,
-            centre_id: params.centreId,
-            token_number: tokenNumber,
-            current_stage: 'waiting',
-            priority_order: priorityOrder,
-            estimated_wait_minutes:
-              estimatedWaitMinutes,
-          })
-
-      if (queueInsertError) {
-        console.error(
-          'Failed to create queue entry:',
-          queueInsertError
-        )
-
-        // Rollback booking
-        await client
-          .from('bookings')
-          .delete()
-          .eq('id', bookingData.id)
-
-        // Rollback slot count
-        await client.rpc('change_slot_booked_count', {
-  p_slot_id: slotData.id,
-  p_delta: -1,
-})
-
-        throw new Error(
-          `Failed to create queue entry: ${queueInsertError.message}`
-        )
-      }
-
-      // 9. Create notification
-      const { error: notificationError } =
-        await client
-          .from('notifications')
-          .insert({
-            user_id: params.farmerId,
-            title:
-              'Booking Confirmed & Token Generated',
-            message:
-              `Token ${tokenNumber} issued for slot ${params.slotTimeStart} - ${params.slotTimeEnd}.`,
-            type: 'slot_confirmed',
-            read: false,
-            sms_sent: true,
-          })
-
-      if (notificationError) {
-        console.error(
-          'Notification insert failed:',
-          notificationError
-        )
-      }
-
-      // 10. Return booking
+      // 4. Return pending booking
       return {
         id: bookingData.id,
-        bookingNumber,
+        bookingNumber: bookingData.booking_number,
         farmerId: params.farmerId,
         farmerName: params.farmerName,
         farmerPhone: params.farmerPhone,
@@ -577,20 +480,348 @@ class DataService implements IDataService {
         slotTimeStart: params.slotTimeStart,
         slotTimeEnd: params.slotTimeEnd,
         estimatedQuantityQuintals:
-          params.estimatedQuantityQuintals,
-        vehicleType: params.vehicleType,
-        vehicleNumber: params.vehicleNumber,
-        status: 'confirmed',
-        tokenNumber,
-        qrCodeData: qrData,
-        notes: params.notes,
+          Number(bookingData.estimated_quantity_quintals) || 0,
+        numberOfVehicles: Number(bookingData.number_of_vehicles),
+        vehicleType: bookingData.vehicle_type,
+        vehicleNumber: bookingData.vehicle_number,
+        status: 'pending',
+        tokenNumber: null,
+        qrCodeData: null,
+        notes: bookingData.notes,
         createdAt: bookingData.created_at,
         updatedAt: bookingData.updated_at,
       }
     }
 
+    // Local mode compatibility
+    return localStore.createBooking({
+      ...params,
+    })
+  }
+    public async acceptBooking(bookingId: string): Promise<Booking> {
+    const client = supabase
+
+    if (this.isCloudMode() && client) {
+
+      // 1. Get the pending booking
+      const { data: booking, error: bookingFetchError } = await client
+        .from('bookings')
+        .select('*')
+        .eq('id', bookingId)
+        .maybeSingle()
+
+      if (bookingFetchError || !booking) {
+        throw new Error(
+          bookingFetchError?.message || 'Booking request not found'
+        )
+      }
+
+      // 2. Only PENDING bookings can be accepted
+      if (booking.status !== 'pending') {
+        throw new Error(
+          `This booking cannot be accepted because its status is "${booking.status}".`
+        )
+      }
+
+      // 3. Find the selected time slot
+      const { data: slotData, error: slotError } = await client
+        .from('time_slots')
+        .select('id, booked_count, max_capacity_farmers')
+        .eq('centre_id', booking.centre_id)
+        .eq('slot_date', booking.slot_date)
+        .eq('start_time', booking.slot_time_start)
+        .eq('end_time', booking.slot_time_end)
+        .maybeSingle()
+
+      if (slotError || !slotData) {
+        throw new Error(
+          slotError?.message || 'Selected time slot not found'
+        )
+      }
+
+      // 4. Check slot capacity before accepting
+      if (
+        Number(slotData.booked_count) >=
+        Number(slotData.max_capacity_farmers)
+      ) {
+        throw new Error(
+          'Selected time slot is full. Cannot accept this booking.'
+        )
+      }
+
+      // 5. Generate token only NOW — after operator acceptance
+      const { count: confirmedCount, error: countError } = await client
+        .from('bookings')
+        .select('id', { count: 'exact', head: true })
+        .eq('centre_id', booking.centre_id)
+        .eq('slot_date', booking.slot_date)
+        .not('status', 'in', '(pending,rejected,cancelled)')
+
+      if (countError) {
+        console.error(
+          'Failed to calculate token sequence:',
+          countError
+        )
+      }
+
+      const tokenSeq = (confirmedCount || 0) + 1
+      const tokenNumber = `T-${String(tokenSeq).padStart(3, '0')}`
+
+      // 6. Generate QR only NOW
+      // Keep the QR payload intentionally short and scanner-friendly.
+      // The operator scanner only needs the booking number; it then fetches
+      // the authoritative booking record from Supabase.
+      const qrData = booking.booking_number
+
+      // 7. Accept the booking
+      const { data: updatedBooking, error: bookingUpdateError } =
+        await client
+          .from('bookings')
+          .update({
+            status: 'confirmed',
+            token_number: tokenNumber,
+            qr_code_data: qrData,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', booking.id)
+          .eq('status', 'pending')
+          .select()
+          .single()
+
+      if (bookingUpdateError || !updatedBooking) {
+        throw new Error(
+          bookingUpdateError?.message ||
+          'Failed to accept booking request'
+        )
+      }
+
+      // 8. Reserve one slot capacity
+      const { error: slotUpdateError } = await client.rpc(
+        'change_slot_booked_count',
+        {
+          p_slot_id: slotData.id,
+          p_delta: 1,
+        }
+      )
+
+      if (slotUpdateError) {
+        // Roll booking back to pending if capacity update fails
+        await client
+          .from('bookings')
+          .update({
+            status: 'pending',
+            token_number: null,
+            qr_code_data: null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', booking.id)
+
+        throw new Error(
+          `Failed to reserve slot capacity: ${slotUpdateError.message}`
+        )
+      }
+
+      // 9. Calculate queue position
+      const { count: queueCount, error: queueCountError } =
+        await client
+          .from('queue_entries')
+          .select('id', {
+            count: 'exact',
+            head: true,
+          })
+          .eq('centre_id', booking.centre_id)
+          .in('current_stage', [
+            'waiting',
+            'gate_passed',
+            'called_to_gate',
+          ])
+
+      if (queueCountError) {
+        console.error(
+          'Failed to calculate queue position:',
+          queueCountError
+        )
+      }
+
+      const priorityOrder = (queueCount || 0) + 1
+      const estimatedWaitMinutes =
+        Math.max(10, priorityOrder * 12)
+
+      // 10. Create queue entry
+      const { error: queueInsertError } = await client
+        .from('queue_entries')
+        .insert({
+          booking_id: booking.id,
+          centre_id: booking.centre_id,
+          token_number: tokenNumber,
+          current_stage: 'waiting',
+          priority_order: priorityOrder,
+          estimated_wait_minutes: estimatedWaitMinutes,
+        })
+
+      if (queueInsertError) {
+
+        // Rollback booking
+        await client
+          .from('bookings')
+          .update({
+            status: 'pending',
+            token_number: null,
+            qr_code_data: null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', booking.id)
+
+        // Rollback slot capacity
+        await client.rpc(
+          'change_slot_booked_count',
+          {
+            p_slot_id: slotData.id,
+            p_delta: -1,
+          }
+        )
+
+        throw new Error(
+          `Failed to create queue entry: ${queueInsertError.message}`
+        )
+      }
+
+      // 11. Notify farmer
+      const { error: notificationError } = await client
+        .from('notifications')
+        .insert({
+          user_id: booking.farmer_id,
+          title: 'Booking Request Accepted',
+          message:
+            `Your procurement request ${booking.booking_number} has been accepted. Token ${tokenNumber} is now active.`,
+          type: 'slot_confirmed',
+          read: false,
+          sms_sent: true,
+        })
+
+      if (notificationError) {
+        console.error(
+          'Acceptance notification failed:',
+          notificationError
+        )
+      }
+
+      // 12. Return accepted booking
+      return {
+        id: updatedBooking.id,
+        bookingNumber: updatedBooking.booking_number,
+        farmerId: updatedBooking.farmer_id,
+        farmerName: 'Farmer',
+        farmerPhone: '',
+        centreId: updatedBooking.centre_id,
+        centreName: 'Procurement Centre',
+        commodityId: updatedBooking.commodity_id,
+        commodityName: 'Crop',
+        slotDate: updatedBooking.slot_date,
+        slotTimeStart: updatedBooking.slot_time_start,
+        slotTimeEnd: updatedBooking.slot_time_end,
+        estimatedQuantityQuintals: Number(updatedBooking.estimated_quantity_quintals) || 0,
+        numberOfVehicles: Number(
+          updatedBooking.number_of_vehicles
+        ),
+        vehicleType: updatedBooking.vehicle_type,
+        vehicleNumber: updatedBooking.vehicle_number,
+        status: 'confirmed',
+        tokenNumber: updatedBooking.token_number,
+        qrCodeData: updatedBooking.qr_code_data,
+        notes: updatedBooking.notes,
+        createdAt: updatedBooking.created_at,
+        updatedAt: updatedBooking.updated_at,
+      }
+    }
+
     // Local mode
-    return localStore.createBooking(params)
+    const booking = await localStore.getBookingById(bookingId)
+
+    if (!booking) {
+      throw new Error('Booking request not found')
+    }
+
+    if (booking.status !== 'pending') {
+      throw new Error(
+        `This booking cannot be accepted because its status is "${booking.status}".`
+      )
+    }
+
+    return booking
+  }
+
+  public async rejectBooking(bookingId: string): Promise<void> {
+    const client = supabase
+
+    if (this.isCloudMode() && client) {
+      const { data: booking, error: fetchError } = await client
+        .from('bookings')
+        .select('id, farmer_id, status, booking_number')
+        .eq('id', bookingId)
+        .maybeSingle()
+
+      if (fetchError || !booking) {
+        throw new Error(
+          fetchError?.message || 'Booking request not found'
+        )
+      }
+
+      if (booking.status !== 'pending') {
+        throw new Error(
+          `This booking cannot be rejected because its status is "${booking.status}".`
+        )
+      }
+
+      const { data: updatedBooking, error: updateError } = await client
+        .from('bookings')
+        .update({
+          status: 'rejected',
+          token_number: null,
+          qr_code_data: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', bookingId)
+        .eq('status', 'pending')
+        .select('id, status')
+        .maybeSingle()
+
+      if (updateError) {
+        throw new Error(
+          `Failed to reject booking: ${updateError.message}`
+        )
+      }
+
+      if (!updatedBooking) {
+        throw new Error(
+          'Booking was already processed by another operator.'
+        )
+      }
+
+      const { error: notificationError } = await client
+        .from('notifications')
+        .insert({
+          user_id: booking.farmer_id,
+          title: 'Booking Request Rejected',
+          message:
+            `Your procurement request ${booking.booking_number} has been rejected by the operator.`,
+          type: 'booking_request',
+          read: false,
+          sms_sent: false,
+        })
+
+      if (notificationError) {
+        console.error(
+          'Rejection notification failed:',
+          notificationError
+        )
+      }
+
+      return
+    }
+
+    // Local mode compatibility
+    return
   }
 
   public async getQueue(centreId?: string): Promise<QueueEntry[]> {
@@ -631,8 +862,7 @@ class DataService implements IDataService {
       farmerName: q.bookings?.profiles?.full_name || 'Farmer',
       farmerPhone: q.bookings?.profiles?.phone_number || '',
       commodityName: q.bookings?.commodities?.name || 'Grain',
-      estimatedQuantityQuintals:
-        Number(q.bookings?.estimated_quantity_quintals) || 50,
+      numberOfVehicles: Number(q.bookings?.number_of_vehicles) || 1,
       vehicleNumber: q.bookings?.vehicle_number || '',
       currentStage: q.current_stage,
       priorityOrder: q.priority_order,
@@ -700,7 +930,7 @@ class DataService implements IDataService {
               farmerName: booking.profiles?.full_name || 'Farmer',
               farmerPhone: booking.profiles?.phone_number || '',
               commodityName: 'Agri Crop',
-              estimatedQuantityQuintals: Number(booking.estimated_quantity_quintals),
+              numberOfVehicles: Number(booking.number_of_vehicles),
               vehicleNumber: booking.vehicle_number,
               currentStage: 'gate_passed',
               priorityOrder: qe.priority_order,
@@ -793,7 +1023,7 @@ if (bookingUpdateError) {
           farmerName: target.bookings?.profiles?.full_name || 'Farmer',
           farmerPhone: target.bookings?.profiles?.phone_number || '',
           commodityName: 'Grain',
-          estimatedQuantityQuintals: Number(target.bookings?.estimated_quantity_quintals),
+          numberOfVehicles: Number(target.bookings?.number_of_vehicles),
           vehicleNumber: target.bookings?.vehicle_number,
           currentStage: 'called_to_gate',
           priorityOrder: target.priority_order,
@@ -874,8 +1104,18 @@ if (bookingUpdateError) {
 
       if (error || !rec) throw new Error(error?.message || 'Failed to record weighment in Supabase')
 
-      await client.from('bookings').update({ status: 'completed' }).eq('id', booking.id)
-      await client.from('queue_entries').update({ current_stage: 'settled', completed_time: new Date().toISOString() }).eq('booking_id', booking.id)
+      await client
+  .from('bookings')
+  .update({ status: 'weighed' })
+  .eq('id', booking.id)
+
+await client
+  .from('queue_entries')
+  .update({
+    current_stage: 'unloading',
+    updated_at: new Date().toISOString(),
+  })
+  .eq('booking_id', booking.id)
 
       await client.from('notifications').insert({
         user_id: booking.farmer_id,
@@ -912,7 +1152,74 @@ if (bookingUpdateError) {
 
     return localStore.recordProcurement(params)
   }
+  public async completeUnloading(bookingId: string): Promise<void> {
+    const client = supabase
 
+    if (this.isCloudMode() && client) {
+      const { data: booking, error: bookingError } = await client
+        .from('bookings')
+        .select('id, farmer_id, booking_number')
+        .eq('id', bookingId)
+        .single()
+
+      if (bookingError || !booking) {
+        throw new Error(bookingError?.message || 'Booking not found')
+      }
+
+      const { error: recordError } = await client
+        .from('procurement_records')
+        .update({
+          payment_status: 'credited',
+        })
+        .eq('booking_id', bookingId)
+
+      if (recordError) {
+        throw new Error(recordError.message)
+      }
+
+      const { error: bookingUpdateError } = await client
+        .from('bookings')
+        .update({
+          status: 'completed',
+        })
+        .eq('id', bookingId)
+
+      if (bookingUpdateError) {
+        throw new Error(bookingUpdateError.message)
+      }
+
+      const { error: queueError } = await client
+        .from('queue_entries')
+        .update({
+          current_stage: 'settled',
+          completed_time: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('booking_id', bookingId)
+
+      if (queueError) {
+        throw new Error(queueError.message)
+      }
+
+      await client.from('notifications').insert({
+        user_id: booking.farmer_id,
+        title: 'Procurement Completed',
+        message: `Your unloading is complete. Booking ${booking.booking_number} has been settled successfully.`,
+        type: 'weighment_done',
+        read: false,
+        sms_sent: true,
+      })
+
+      return
+    }
+
+    const queueEntries = localStore.getQueue()
+    const entry = queueEntries.find((q) => q.bookingId === bookingId)
+
+    if (entry) {
+      localStore.updateQueueStage(entry.id, 'settled')
+    }
+  }
   public async getProcurementRecords(farmerId?: string, centreId?: string): Promise<ProcurementRecord[]> {
     const client = supabase
     if (this.isCloudMode() && client) {

@@ -2,7 +2,12 @@ export interface Commodity {
   id: string
   code: string
   name: string
-  category: 'Cereals' | 'Pulses' | 'Oilseeds' | 'Cash Crops' | 'Millets'
+  category:
+    | 'Cereals'
+    | 'Pulses'
+    | 'Oilseeds'
+    | 'Cash Crops'
+    | 'Millets'
   variety: string
   mspPricePerQuintal: number
   maxMoisturePercentage: number
@@ -21,7 +26,9 @@ export interface TimeSlot {
 }
 
 export type BookingStatus =
+  | 'pending'
   | 'confirmed'
+  | 'rejected'
   | 'arrived'
   | 'called'
   | 'in_inspection'
@@ -33,23 +40,44 @@ export type BookingStatus =
 export interface Booking {
   id: string
   bookingNumber: string // e.g. MS-2026-8910
+
   farmerId: string
   farmerName: string
   farmerPhone: string
+
   centreId: string
   centreName: string
+
   commodityId: string
   commodityName: string
+
   slotDate: string
   slotTimeStart: string
   slotTimeEnd: string
+
+  // Farmer's manually entered estimated produce quantity
   estimatedQuantityQuintals: number
-  vehicleType: 'Tractor Trolley' | 'Mini Truck' | 'Truck' | 'Bullock Cart' | 'Pickup Van'
+
+  // Number of vehicles bringing produce
+  numberOfVehicles: number
+
+  vehicleType:
+    | 'Tractor Trolley'
+    | 'Mini Truck'
+    | 'Truck'
+    | 'Bullock Cart'
+    | 'Pickup Van'
+
   vehicleNumber: string
+
   status: BookingStatus
-  tokenNumber: string // e.g. T-014
-  qrCodeData: string // Encoded payload for gate verification
+
+  // Generated only after operator accepts
+  tokenNumber: string | null
+  qrCodeData: string | null
+
   notes?: string
+
   createdAt: string
   updatedAt: string
 }
@@ -73,7 +101,10 @@ export interface QueueEntry {
   farmerName: string
   farmerPhone: string
   commodityName: string
-  estimatedQuantityQuintals: number
+
+  // Number of vehicles associated with this booking
+  numberOfVehicles: number
+
   vehicleNumber: string
   currentStage: QueueStage
   priorityOrder: number
@@ -92,16 +123,29 @@ export interface ProcurementRecord {
   farmerName: string
   centreId: string
   commodityName: string
+
   grossWeightKg: number
   tareWeightKg: number
   netWeightKg: number
+
   moisturePercentage: number
-  qualityGrade: 'Grade A' | 'Grade B' | 'Fair Average Quality (FAQ)'
+
+  qualityGrade:
+    | 'Grade A'
+    | 'Grade B'
+    | 'Fair Average Quality (FAQ)'
+
   deductionKg: number
   finalAcceptedQuintals: number
   ratePerQuintal: number
   totalPayableAmount: number
-  paymentStatus: 'pending' | 'processing' | 'credited' | 'rejected'
+
+  paymentStatus:
+    | 'pending'
+    | 'processing'
+    | 'credited'
+    | 'rejected'
+
   paymentUtr?: string
   operatorId: string
   createdAt: string
@@ -113,21 +157,25 @@ export interface AdminAnalytics {
   averageWaitTimeMinutes: number
   farmersServedTotal: number
   capacityUtilisationPercentage: number
+
   commodityProcurement: {
     name: string
     quintals: number
     valueInr: number
   }[]
+
   paymentStatusBreakdown: {
     pending: number
     processing: number
     credited: number
     totalAmountInr: number
   }
+
   throughputPerHour: {
     hour: string
     count: number
   }[]
+
   centrePerformance: {
     centreId: string
     centreName: string
