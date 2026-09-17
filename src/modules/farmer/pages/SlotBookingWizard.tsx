@@ -40,50 +40,87 @@ export const SlotBookingWizard: React.FC<SlotBookingWizardProps> = ({
   const [selectedSlotId, setSelectedSlotId] = useState<string>('')
   const [liveSlots, setLiveSlots] = useState<TimeSlot[]>(slots)
 
-  // Admin-controlled Mandi status. A closed/inactive Mandi must not expose
-  // booking dates or time windows and must reject new bookings.
-  const selectedCentre = centres.find((c) => c.id === centreId)
+  // Admin-controlled Mandi status.
+  // The Farmer page may have an older `centres` prop if Admin changed the
+  // Mandi after the Farmer page was already open. Keep a fresh local copy.
+  const [liveCentre, setLiveCentre] = useState<ProcurementCentre | undefined>(
+    () => centres.find((c) => c.id === centreId)
+  )
+
+  const selectedCentre = liveCentre ?? centres.find((c) => c.id === centreId)
+
   const centreOperationalStatus = String(
     (selectedCentre as ProcurementCentre & { operationalStatus?: string })?.operationalStatus ?? ''
-  ).toLowerCase()
+  ).trim().toLowerCase()
+
   const isCentreActive = centreOperationalStatus === 'active'
 
   useEffect(() => {
-  setLiveSlots(slots)
-}, [slots])
+    setLiveSlots(slots)
+  }, [slots])
 
-useEffect(() => {
-  let active = true
+  useEffect(() => {
+    let active = true
 
-  const refreshSlots = async () => {
-    if (!centreId || !slotDate || !isCentreActive) {
-      setLiveSlots([])
-      setSelectedSlotId('')
-      return
-    }
-
-    try {
-      const freshSlots = await api.getSlots(centreId, slotDate)
-
-      if (active) {
-        setLiveSlots(freshSlots)
+    const refreshCentreAndSlots = async () => {
+      if (!centreId) {
+        setLiveCentre(undefined)
+        setLiveSlots([])
+        setSelectedSlotId('')
+        return
       }
-    } catch (error) {
-      console.error('Failed to refresh time slots:', error)
+
+      try {
+        // Always fetch the selected Mandi again so Admin status changes are
+        // reflected even when the Farmer page was opened earlier.
+        const freshCentre = await api.getCentreById(centreId)
+
+        if (!active) return
+
+        setLiveCentre(freshCentre)
+
+        const freshStatus = String(
+          (freshCentre as ProcurementCentre & { operationalStatus?: string })?.operationalStatus ?? ''
+        ).trim().toLowerCase()
+
+        if (freshStatus !== 'active') {
+          setLiveSlots([])
+          setSelectedSlotId('')
+          return
+        }
+
+        if (!slotDate) {
+          setLiveSlots([])
+          setSelectedSlotId('')
+          return
+        }
+
+        const freshSlots = await api.getSlots(centreId, slotDate)
+
+        if (active) {
+          setLiveSlots(freshSlots)
+        }
+      } catch (error) {
+        console.error('Failed to refresh Mandi status / time slots:', error)
+      }
     }
-  }
 
-  refreshSlots()
+    refreshCentreAndSlots()
 
-  const unsubscribe = api.subscribe(() => {
-    refreshSlots()
-  })
+    // Fallback live check: if Admin closes/opens a Mandi while this wizard
+    // is already open, the Farmer UI updates automatically within 3 seconds.
+    const intervalId = window.setInterval(refreshCentreAndSlots, 3000)
 
-  return () => {
-    active = false
-    unsubscribe()
-  }
-}, [centreId, slotDate, isCentreActive])
+    const unsubscribe = api.subscribe(() => {
+      refreshCentreAndSlots()
+    })
+
+    return () => {
+      active = false
+      window.clearInterval(intervalId)
+      unsubscribe()
+    }
+  }, [centreId, slotDate])
 
   // Estimated quantity in quintals
   const [estimatedQuantity, setEstimatedQuantity] =
@@ -151,7 +188,18 @@ useEffect(() => {
       return
     }
 
-    if (!isCentreActive) {
+    // Final fresh status check immediately before creating a booking.
+    // This prevents a booking if Admin closed the Mandi after the screen loaded.
+    const freshCentre = await api.getCentreById(centreId)
+    const freshCentreStatus = String(
+      (freshCentre as ProcurementCentre & { operationalStatus?: string })?.operationalStatus ?? ''
+    ).trim().toLowerCase()
+
+    setLiveCentre(freshCentre)
+
+    if (freshCentreStatus !== 'active') {
+      setLiveSlots([])
+      setSelectedSlotId('')
       setError('This procurement centre is currently closed and is not accepting new bookings.')
       return
     }
