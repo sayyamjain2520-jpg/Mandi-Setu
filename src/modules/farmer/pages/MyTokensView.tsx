@@ -16,6 +16,7 @@ import {
   ClipboardCheck,
   PackageCheck,
   MapPin,
+  Activity,
 } from 'lucide-react'
 
 interface MyTokensViewProps {
@@ -88,6 +89,77 @@ const getStageIndex = (stage?: QueueStage) => {
   const index = TRACKING_STAGES.findIndex((item) => item.key === stage)
 
   return index >= 0 ? index : 0
+}
+
+const getCongestionMeta = (
+  estimatedWaitMinutes: number,
+  farmersAhead: number
+) => {
+  if (estimatedWaitMinutes >= 60 || farmersAhead >= 15) {
+    return {
+      label: 'High Congestion',
+      shortLabel: 'HIGH',
+      className: 'bg-rose-50 text-rose-700 border-rose-200',
+      dotClassName: 'bg-rose-500',
+    }
+  }
+
+  if (estimatedWaitMinutes >= 30 || farmersAhead >= 8) {
+    return {
+      label: 'Moderate Congestion',
+      shortLabel: 'MODERATE',
+      className: 'bg-amber-50 text-amber-700 border-amber-200',
+      dotClassName: 'bg-amber-500',
+    }
+  }
+
+  return {
+    label: 'Low Congestion',
+    shortLabel: 'LOW',
+    className: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    dotClassName: 'bg-emerald-500',
+  }
+}
+
+const getPredictedServiceTime = (
+  booking: Booking,
+  estimatedWaitMinutes: number
+) => {
+  const [hours, minutes] = booking.slotTimeStart
+    .split(':')
+    .map(Number)
+
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) {
+    return null
+  }
+
+  const base = new Date(`${booking.slotDate}T${booking.slotTimeStart}`)
+  if (Number.isNaN(base.getTime())) {
+    return null
+  }
+
+  // For a future slot, project from the booked start time.
+  // For an active/today queue, project from the current time.
+  const now = new Date()
+  const isToday =
+    booking.slotDate ===
+    now.toISOString().slice(0, 10)
+
+  const anchor =
+    isToday && now.getTime() > base.getTime()
+      ? now
+      : base
+
+  const predicted = new Date(
+    anchor.getTime() +
+      Math.max(0, estimatedWaitMinutes) * 60 * 1000
+  )
+
+  return predicted.toLocaleTimeString('en-IN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  })
 }
 
 export const MyTokensView: React.FC<MyTokensViewProps> = ({
@@ -226,6 +298,114 @@ export const MyTokensView: React.FC<MyTokensViewProps> = ({
                     )}
                   </div>
                 </div>
+
+                {/* Smart Arrival */}
+                {queueEntry && booking.status !== 'completed' && (
+                  <div className="mt-4 rounded-2xl border border-emerald-200 bg-gradient-to-br from-emerald-50 to-white p-4">
+                    {(() => {
+                      const estimatedWait = Math.max(
+                        0,
+                        Number(queueEntry.estimatedWaitMinutes) || 0
+                      )
+                      const farmersAhead = Math.max(
+                        0,
+                        Number(queueEntry.priorityOrder || 1) - 1
+                      )
+                      const congestion = getCongestionMeta(
+                        estimatedWait,
+                        farmersAhead
+                      )
+                      const predictedServiceTime =
+                        getPredictedServiceTime(
+                          booking,
+                          estimatedWait
+                        )
+
+                      return (
+                        <>
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <div className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center">
+                                  <Activity className="w-4 h-4" />
+                                </div>
+                                <div>
+                                  <p className="text-[10px] uppercase tracking-wider font-black text-emerald-700">
+                                    Smart Arrival
+                                  </p>
+                                  <p className="text-xs text-slate-500">
+                                    Live queue-based estimate
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+
+                            <span
+                              className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[9px] font-black uppercase ${congestion.className}`}
+                            >
+                              <span
+                                className={`w-1.5 h-1.5 rounded-full ${congestion.dotClassName}`}
+                              />
+                              {congestion.shortLabel}
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-3 gap-2 mt-4">
+                            <div className="rounded-xl bg-white border border-slate-200 p-3">
+                              <p className="text-[9px] uppercase font-bold text-slate-400">
+                                Ahead
+                              </p>
+                              <p className="text-lg font-black text-slate-900 mt-1">
+                                {farmersAhead}
+                              </p>
+                              <p className="text-[9px] text-slate-500">
+                                farmers
+                              </p>
+                            </div>
+
+                            <div className="rounded-xl bg-white border border-slate-200 p-3">
+                              <p className="text-[9px] uppercase font-bold text-slate-400">
+                                Est. Wait
+                              </p>
+                              <p className="text-lg font-black text-slate-900 mt-1">
+                                {estimatedWait}
+                              </p>
+                              <p className="text-[9px] text-slate-500">
+                                minutes
+                              </p>
+                            </div>
+
+                            <div className="rounded-xl bg-white border border-slate-200 p-3">
+                              <p className="text-[9px] uppercase font-bold text-slate-400">
+                                Queue
+                              </p>
+                              <p className="text-lg font-black text-slate-900 mt-1">
+                                #{queueEntry.priorityOrder}
+                              </p>
+                              <p className="text-[9px] text-slate-500">
+                                position
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="mt-3 rounded-xl bg-white border border-emerald-200 px-3 py-2.5 flex items-center justify-between gap-3">
+                            <div>
+                              <p className="text-[9px] uppercase font-black tracking-wider text-emerald-700">
+                                Predicted Service
+                              </p>
+                              <p className="text-xs text-slate-500 mt-0.5">
+                                Based on current queue conditions
+                              </p>
+                            </div>
+                            <p className="text-sm font-black text-slate-900 whitespace-nowrap">
+                              {predictedServiceTime || 'Updating...'}
+                            </p>
+                          </div>
+                        </>
+                      )
+                    })()}
+                  </div>
+                )}
 
                 {/* Track button */}
                 <button
@@ -403,7 +583,11 @@ export const MyTokensView: React.FC<MyTokensViewProps> = ({
 
                   {/* Queue information */}
                   {queueEntry && (
-                    <div className="mt-4 grid grid-cols-2 gap-3">
+                    <div className="mt-4">
+                      <p className="text-[10px] uppercase tracking-wider font-black text-slate-400 mb-2">
+                        Live Queue Details
+                      </p>
+                      <div className="grid grid-cols-2 gap-3">
                       <div className="bg-white border border-slate-200 rounded-xl p-3">
                         <p className="text-[10px] uppercase font-bold text-slate-400">
                           Queue Position
@@ -425,6 +609,7 @@ export const MyTokensView: React.FC<MyTokensViewProps> = ({
                             min
                           </span>
                         </p>
+                      </div>
                       </div>
                     </div>
                   )}

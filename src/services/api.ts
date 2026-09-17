@@ -39,6 +39,16 @@ export interface IDataService {
     acceptBooking(bookingId: string): Promise<Booking>
   rejectBooking(bookingId: string): Promise<void>
   getQueue(centreId?: string): Promise<QueueEntry[]>
+  calculateSmartWaitTime(params: {
+    centreId: string
+    farmersAhead: number
+    numberOfVehicles?: number
+  }): Promise<{
+    estimatedWaitMinutes: number
+    congestionLevel: 'low' | 'medium' | 'high'
+    averageProcessingMinutes: number
+    activeProcessingCapacity: number
+  }>
   checkInAtGate(tokenOrBookingNumber: string): Promise<{ success: boolean; message: string; entry?: QueueEntry }>
   callNextInQueue(centreId: string): Promise<{ success: boolean; entry?: QueueEntry; message: string }>
   updateQueueStage(queueId: string, stage: QueueStage): Promise<void>
@@ -644,8 +654,17 @@ class DataService implements IDataService {
       }
 
       const priorityOrder = (queueCount || 0) + 1
+
+      // Smart Arrival Engine replaces the old hard-coded
+      // priorityOrder * 12 calculation.
+      const smartWait = await this.calculateSmartWaitTime({
+        centreId: booking.centre_id,
+        farmersAhead: queueCount || 0,
+        numberOfVehicles: Number(booking.number_of_vehicles) || 1,
+      })
+
       const estimatedWaitMinutes =
-        Math.max(10, priorityOrder * 12)
+        smartWait.estimatedWaitMinutes
 
       // 10. Create queue entry
       const { error: queueInsertError } = await client
@@ -824,6 +843,171 @@ class DataService implements IDataService {
     return
   }
 
+  /**
+   * Smart Arrival Engine
+   *
+   * Uses live queue data + completed queue history to estimate waiting time.
+   * No fake/random wait values are used.
+   *
+   * Formula:
+   *   estimated wait =
+   *   farmers ahead × average processing time × vehicle factor
+   *   ÷ active processing capacity
+   *
+   * Historical processing time is calculated from:
+   *   arrival_time → completed_time
+   *
+   * When there is not enough history, the engine uses a conservative
+   * 8-minute baseline until real centre data becomes available.
+   */
+  public async calculateSmartWaitTime(params: {
+    centreId: string
+    farmersAhead: number
+    numberOfVehicles?: number
+  }): Promise<{
+    estimatedWaitMinutes: number
+    congestionLevel: 'low' | 'medium' | 'high'
+    averageProcessingMinutes: number
+    activeProcessingCapacity: number
+  }> {
+    const client = supabase
+
+    const safeFarmersAhead = Math.max(
+      0,
+      Number(params.farmersAhead) || 0
+    )
+
+    const safeVehicles = Math.max(
+      1,
+      Math.min(Number(params.numberOfVehicles) || 1, 3)
+    )
+
+    // Conservative fallback while a centre builds real processing history.
+    let averageProcessingMinutes = 8
+    let activeProcessingCapacity = 1
+
+    if (this.isCloudMode() && client) {
+      // Read recent completed queue entries so the estimate learns from
+      // actual centre operations.
+      const { data: completedEntries, error: historyError } = await client
+        .from('queue_entries')
+        .select('arrival_time, completed_time')
+        .eq('centre_id', params.centreId)
+        .not('arrival_time', 'is', null)
+        .not('completed_time', 'is', null)
+        .order('completed_time', { ascending: false })
+        .limit(50)
+
+      if (historyError) {
+        console.warn(
+          'Smart Arrival: unable to load processing history:',
+          historyError.message
+        )
+      }
+
+      if (completedEntries && completedEntries.length > 0) {
+        const durations = completedEntries
+          .map((entry) => {
+            const arrival = new Date(entry.arrival_time).getTime()
+            const completed = new Date(entry.completed_time).getTime()
+
+            if (
+              !Number.isFinite(arrival) ||
+              !Number.isFinite(completed) ||
+              completed <= arrival
+            ) {
+              return null
+            }
+
+            const minutes = (completed - arrival) / 60000
+
+            // Ignore obviously bad/stale measurements.
+            return minutes > 0 && minutes <= 180
+              ? minutes
+              : null
+          })
+          .filter(
+            (minutes): minutes is number =>
+              minutes !== null
+          )
+
+        if (durations.length > 0) {
+          averageProcessingMinutes = Math.max(
+            1,
+            Math.round(
+              durations.reduce(
+                (sum, minutes) => sum + minutes,
+                0
+              ) / durations.length
+            )
+          )
+        }
+      }
+
+      // Estimate currently active processing capacity from the live queue.
+      // At least one processing lane is assumed so the system remains
+      // conservative instead of promising an unrealistically short wait.
+      const { count: activeProcessors, error: processorError } =
+        await client
+          .from('queue_entries')
+          .select('id', {
+            count: 'exact',
+            head: true,
+          })
+          .eq('centre_id', params.centreId)
+          .eq('current_stage', 'called_to_gate')
+
+      if (processorError) {
+        console.warn(
+          'Smart Arrival: unable to read active processors:',
+          processorError.message
+        )
+      } else {
+        activeProcessingCapacity = Math.max(
+          1,
+          Math.min(activeProcessors || 1, 3)
+        )
+      }
+    }
+
+    // A multi-vehicle booking normally takes more handling time than a
+    // single-vehicle arrival, but the factor is intentionally capped.
+    const vehicleFactor =
+      safeVehicles === 1
+        ? 1
+        : safeVehicles === 2
+          ? 1.35
+          : 1.7
+
+    const estimatedWaitMinutes = Math.max(
+      0,
+      Math.ceil(
+        (safeFarmersAhead *
+          averageProcessingMinutes *
+          vehicleFactor) /
+          activeProcessingCapacity
+      )
+    )
+
+    let congestionLevel: 'low' | 'medium' | 'high' = 'low'
+
+    if (estimatedWaitMinutes >= 60 || safeFarmersAhead >= 15) {
+      congestionLevel = 'high'
+    } else if (
+      estimatedWaitMinutes >= 30 ||
+      safeFarmersAhead >= 8
+    ) {
+      congestionLevel = 'medium'
+    }
+
+    return {
+      estimatedWaitMinutes,
+      congestionLevel,
+      averageProcessingMinutes,
+      activeProcessingCapacity,
+    }
+  }
+
   public async getQueue(centreId?: string): Promise<QueueEntry[]> {
   const client = supabase
 
@@ -950,7 +1134,14 @@ class DataService implements IDataService {
     if (this.isCloudMode() && client) {
       const { data: eligible } = await client
         .from('queue_entries')
-        .select('*, bookings(*, profiles:profiles!bookings_farmer_id_fkey(full_name, phone_number))')
+        .select(`
+  *,
+  bookings(
+    *,
+    profiles:profiles!bookings_farmer_id_fkey(full_name, phone_number),
+    commodities:commodities!bookings_commodity_id_fkey(name)
+  )
+`)
         .eq('centre_id', centreId)
         .in('current_stage', ['waiting', 'gate_passed'])
         .order('priority_order', { ascending: true })

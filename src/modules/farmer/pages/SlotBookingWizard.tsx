@@ -40,6 +40,11 @@ export const SlotBookingWizard: React.FC<SlotBookingWizardProps> = ({
   const [selectedSlotId, setSelectedSlotId] = useState<string>('')
   const [liveSlots, setLiveSlots] = useState<TimeSlot[]>(slots)
 
+  // Smart Slot Recommendation
+  const [recommendedSlotId, setRecommendedSlotId] = useState<string>('')
+  const [recommendedWaitMinutes, setRecommendedWaitMinutes] = useState<number | null>(null)
+  const [isCalculatingRecommendation, setIsCalculatingRecommendation] = useState(false)
+
   // Admin-controlled Mandi status.
   // The Farmer page may have an older `centres` prop if Admin changed the
   // Mandi after the Farmer page was already open. Keep a fresh local copy.
@@ -160,6 +165,114 @@ export const SlotBookingWizard: React.FC<SlotBookingWizardProps> = ({
   const availableSlots = liveSlots.filter(
   (s) => s.centreId === centreId && s.slotDate === slotDate
 )
+
+  // Recommend the available slot with the lowest expected waiting time.
+  // Recalculate silently so the recommendation never disappears/blinks while
+  // the 3-second live Mandi refresh is running.
+  useEffect(() => {
+    let active = true
+
+    const calculateRecommendation = async () => {
+      const eligibleSlots = availableSlots.filter(
+        (slot) => slot.maxCapacityFarmers - slot.bookedCount > 0
+      )
+
+      if (!centreId || eligibleSlots.length === 0 || !isCentreActive) {
+        if (active) {
+          setRecommendedSlotId('')
+          setRecommendedWaitMinutes(null)
+          setIsCalculatingRecommendation(false)
+        }
+        return
+      }
+
+      // IMPORTANT: Do not clear the current recommendation here.
+      // The old version cleared it before every calculation, while the
+      // live 3-second slot refresh was running. That caused the visible blink.
+      setIsCalculatingRecommendation(true)
+
+      try {
+        const scoredSlots = await Promise.all(
+          eligibleSlots.map(async (slot) => {
+            try {
+              const smartWait = await api.calculateSmartWaitTime({
+                centreId,
+                farmersAhead: slot.bookedCount,
+                numberOfVehicles,
+              })
+
+              return {
+                slot,
+                waitMinutes: smartWait.estimatedWaitMinutes,
+              }
+            } catch (error) {
+              console.warn(
+                'Failed to calculate smart slot recommendation:',
+                error
+              )
+
+              return {
+                slot,
+                waitMinutes: Math.max(
+                  5,
+                  Math.ceil(
+                    (slot.bookedCount * 8) /
+                      Math.max(1, Math.min(slot.maxCapacityFarmers, 3))
+                  )
+                ),
+              }
+            }
+          })
+        )
+
+        if (!active || scoredSlots.length === 0) return
+
+        scoredSlots.sort((a, b) => {
+          if (a.waitMinutes !== b.waitMinutes) {
+            return a.waitMinutes - b.waitMinutes
+          }
+
+          const aRemaining =
+            a.slot.maxCapacityFarmers - a.slot.bookedCount
+          const bRemaining =
+            b.slot.maxCapacityFarmers - b.slot.bookedCount
+
+          return bRemaining - aRemaining
+        })
+
+        const best = scoredSlots[0]
+
+        // Update only after a complete calculation is ready.
+        // The previous recommendation remains visible during calculation.
+        setRecommendedSlotId(best.slot.id)
+        setRecommendedWaitMinutes(best.waitMinutes)
+
+        setSelectedSlotId((current) => {
+          const currentSlot = eligibleSlots.find(
+            (slot) => slot.id === current
+          )
+
+          return currentSlot ? current : best.slot.id
+        })
+      } finally {
+        if (active) {
+          setIsCalculatingRecommendation(false)
+        }
+      }
+    }
+
+    calculateRecommendation()
+
+    return () => {
+      active = false
+    }
+  }, [
+    centreId,
+    slotDate,
+    liveSlots,
+    numberOfVehicles,
+    isCentreActive,
+  ])
 
   const handleDateChange = (value: string) => {
     setSlotDate(value)
@@ -390,55 +503,147 @@ export const SlotBookingWizard: React.FC<SlotBookingWizardProps> = ({
                   No time slots available for this Mandi on {slotDate}.
                 </div>
               ) : (
-                <div className="grid grid-cols-2 gap-2">
-                  {availableSlots.map((slot) => {
-                    const isSelected =
-                      selectedSlotId === slot.id ||
-                      (!selectedSlotId && slot === availableSlots[0])
-
-                    const remaining = Math.max(
-                      0,
-                      slot.maxCapacityFarmers - slot.bookedCount
-                    )
-
-                    const isFull = remaining <= 0
-
-                    return (
-                      <button
-                        type="button"
-                        key={slot.id}
-                        disabled={isFull}
-                        onClick={() => setSelectedSlotId(slot.id)}
-                        className={`p-3 rounded-xl border text-left transition-all ${
-                          isFull
-                            ? 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
-                            : isSelected
-                              ? 'bg-emerald-800 text-white border-emerald-800 ring-2 ring-emerald-600/30'
-                              : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
-                        }`}
-                      >
-                        <div className="flex items-center gap-1.5 text-xs font-bold">
-                          <Clock className="w-3.5 h-3.5" />
-                          <span>
-                            {slot.startTime} - {slot.endTime}
-                          </span>
+                <>
+                  {recommendedSlotId && (
+                    <div className="mb-3 p-3.5 rounded-xl border border-emerald-200 bg-emerald-50">
+                      <div className="flex items-start gap-3">
+                        <div className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0">
+                          <CheckCircle2 className="w-4 h-4" />
                         </div>
 
-                        <span
-                          className={`text-[10px] mt-1 block ${
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <div>
+                              <p className="text-[10px] uppercase tracking-wider font-black text-emerald-800">
+                                Smart Recommendation
+                              </p>
+                              <p className="text-xs text-emerald-700 mt-0.5">
+                                Lowest expected waiting time among available slots
+                              </p>
+                            </div>
+
+                            {isCalculatingRecommendation && (
+                              <span className="text-[10px] font-bold text-emerald-700">
+                                Updating...
+                              </span>
+                            )}
+                          </div>
+
+                          {(() => {
+                            const recommendedSlot = availableSlots.find(
+                              (slot) => slot.id === recommendedSlotId
+                            )
+
+                            if (!recommendedSlot) return null
+
+                            return (
+                              <div className="mt-2.5 flex items-center justify-between gap-3">
+                                <div>
+                                  <p className="text-sm font-black text-emerald-950">
+                                    {recommendedSlot.startTime} - {recommendedSlot.endTime}
+                                  </p>
+                                  <p className="text-[10px] text-emerald-700 mt-0.5">
+                                    {Math.max(
+                                      0,
+                                      recommendedSlot.maxCapacityFarmers -
+                                        recommendedSlot.bookedCount
+                                    )}{' '}
+                                    gate slots open
+                                  </p>
+                                </div>
+
+                                <div className="text-right">
+                                  <p className="text-[9px] uppercase font-black tracking-wider text-emerald-700">
+                                    Expected Wait
+                                  </p>
+                                  <p className="text-sm font-black text-emerald-950">
+                                    {recommendedWaitMinutes ?? '—'} min
+                                  </p>
+                                </div>
+                              </div>
+                            )
+                          })()}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {isCalculatingRecommendation && !recommendedSlotId && (
+                    <div className="mb-3 p-3 rounded-xl border border-slate-200 bg-slate-50 text-xs text-slate-500 text-center">
+                      Calculating the lowest-wait slot from live mandi conditions...
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-2 gap-2">
+                    {availableSlots.map((slot) => {
+                      const isSelected =
+                        selectedSlotId === slot.id ||
+                        (!selectedSlotId && slot === availableSlots[0])
+
+                      const remaining = Math.max(
+                        0,
+                        slot.maxCapacityFarmers - slot.bookedCount
+                      )
+
+                      const isFull = remaining <= 0
+                      const isRecommended =
+                        recommendedSlotId === slot.id
+
+                      return (
+                        <button
+                          type="button"
+                          key={slot.id}
+                          disabled={isFull}
+                          onClick={() => setSelectedSlotId(slot.id)}
+                          className={`relative p-3 rounded-xl border text-left transition-all ${
                             isFull
-                              ? 'text-slate-400'
+                              ? 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
                               : isSelected
-                                ? 'text-emerald-200'
-                                : 'text-slate-500'
+                                ? 'bg-emerald-800 text-white border-emerald-800 ring-2 ring-emerald-600/30'
+                                : isRecommended
+                                  ? 'bg-emerald-50 border-emerald-300 text-emerald-900 hover:bg-emerald-100'
+                                  : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
                           }`}
                         >
-                          {isFull ? 'Slot full' : `${remaining} gate slots open`}
-                        </span>
-                      </button>
-                    )
-                  })}
-                </div>
+                          {isRecommended && !isFull && (
+                            <span
+                              className={`absolute -top-2 right-2 px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-wider ${
+                                isSelected
+                                  ? 'bg-white text-emerald-800'
+                                  : 'bg-emerald-600 text-white'
+                              }`}
+                            >
+                              Recommended
+                            </span>
+                          )}
+
+                          <div className="flex items-center gap-1.5 text-xs font-bold">
+                            <Clock className="w-3.5 h-3.5" />
+                            <span>
+                              {slot.startTime} - {slot.endTime}
+                            </span>
+                          </div>
+
+                          <span
+                            className={`text-[10px] mt-1 block ${
+                              isFull
+                                ? 'text-slate-400'
+                                : isSelected
+                                  ? 'text-emerald-200'
+                                  : isRecommended
+                                    ? 'text-emerald-700'
+                                    : 'text-slate-500'
+                            }`}
+                          >
+                            {isFull
+                              ? 'Slot full'
+                              : `${remaining} gate slots open`}
+                          </span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </>
               )}
             </div>
           </Card>
