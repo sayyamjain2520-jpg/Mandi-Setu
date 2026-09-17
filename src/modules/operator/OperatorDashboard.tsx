@@ -943,6 +943,23 @@ export const OperatorDashboard: React.FC = () => {
             </div>
           ) : (
             filteredQueue.map((entry) => {
+              // Prefer the farmer name stored on the booking. This prevents
+              // the generic "Farmer" fallback in a queue entry from hiding
+              // the actual registered farmer name.
+              const bookingForEntry = bookings.find(
+                (booking) => booking.id === entry.bookingId
+              )
+
+              const displayFarmerName =
+                bookingForEntry?.farmerName?.trim() ||
+                entry.farmerName?.trim() ||
+                'Farmer'
+
+              const displayFarmerPhone =
+                bookingForEntry?.farmerPhone ||
+                entry.farmerPhone ||
+                ''
+
               return (
                 <Card
                   key={entry.id}
@@ -975,8 +992,8 @@ export const OperatorDashboard: React.FC = () => {
 
                         <div className="flex items-center gap-2">
 
-                          <h4 className="text-sm font-bold text-slate-900">
-                            {entry.farmerName}
+                          <h4 className="text-sm font-black text-slate-900">
+                            {displayFarmerName}
                           </h4>
 
                           <StatusPill
@@ -988,8 +1005,10 @@ export const OperatorDashboard: React.FC = () => {
                         </div>
 
                         <p className="text-xs text-slate-500 font-mono mt-0.5">
-                          {entry.bookingNumber} •{' '}
-                          {entry.farmerPhone}
+                          {entry.bookingNumber}
+                          {displayFarmerPhone
+                            ? ` • ${displayFarmerPhone}`
+                            : ''}
                         </p>
 
                         <div className="flex items-center gap-3 mt-1 text-xs text-slate-600 font-medium">
