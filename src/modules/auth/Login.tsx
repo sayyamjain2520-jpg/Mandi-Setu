@@ -4,7 +4,6 @@ import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import {
-  Wheat,
   Mail,
   Lock,
   Phone,
@@ -144,12 +143,14 @@ export const Login: React.FC<{ onSuccess?: () => void }> = ({
     <div className="max-w-md mx-auto p-4 sm:p-6 space-y-6">
       {/* Brand */}
       <div className="text-center space-y-2">
-        <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-emerald-800 to-emerald-600 text-white flex items-center justify-center mx-auto shadow-md">
-          <Wheat className="w-8 h-8" />
-        </div>
+        <img
+          src="/mandi-setu-logo.png"
+          alt="Mandi Setu"
+          className="w-16 h-16 rounded-2xl object-contain mx-auto shadow-md"
+        />
 
         <h1 className="text-2xl font-black text-slate-900 tracking-tight font-mono">
-          MANDI SETU <span className="text-emerald-700">AI</span>
+          MANDI SETU
         </h1>
 
         <p className="text-xs text-slate-500 max-w-xs mx-auto">

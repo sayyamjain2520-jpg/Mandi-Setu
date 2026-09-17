@@ -46,7 +46,7 @@ export const FarmerHome: React.FC<FarmerHomeProps> = ({
             Namaste, {user?.fullName || 'Kisan Mitra'}!
           </h2>
           <p className="text-xs text-emerald-100 mt-1 max-w-sm">
-            Mandi Setu AI ensures zero waiting at the mandi gate. Book your time slot, get a digital token, and track weighment transparently.
+            Mandi Setu helps reduce waiting at the mandi gate. Book your time slot, get a digital token, and track weighment transparently.
           </p>
 
           <div className="mt-5 flex flex-wrap gap-2.5">
