@@ -121,6 +121,79 @@ const getCongestionMeta = (
   }
 }
 
+const getArrivalGuidance = (
+  booking: Booking,
+  queueEntry?: QueueEntry
+) => {
+  if (!queueEntry) {
+    return {
+      title: 'Waiting for queue activation',
+      description: 'Your booking is confirmed. Live arrival guidance will appear when your token enters the queue.',
+      action: 'Monitor booking',
+      className: 'bg-slate-50 border-slate-200 text-slate-700',
+      accentClassName: 'bg-slate-500',
+    }
+  }
+
+  const stage = queueEntry.currentStage
+
+  if (
+    stage === 'gate_passed' ||
+    stage === 'quality_check' ||
+    stage === 'weighbridge' ||
+    stage === 'unloading'
+  ) {
+    return {
+      title: 'You are already at the Mandi',
+      description: 'Your vehicle has entered the procurement workflow. Follow the current tracking stage.',
+      action: 'Stay at Mandi',
+      className: 'bg-blue-50 border-blue-200 text-blue-800',
+      accentClassName: 'bg-blue-600',
+    }
+  }
+
+  if (stage === 'called_to_gate') {
+    return {
+      title: 'Proceed to the Mandi now',
+      description: 'Your token has been called. Please move to the gate and keep your digital pass ready.',
+      action: 'Proceed now',
+      className: 'bg-rose-50 border-rose-200 text-rose-800',
+      accentClassName: 'bg-rose-600',
+    }
+  }
+
+  if (stage === 'settled') {
+    return {
+      title: 'Procurement completed',
+      description: 'Your procurement process is complete. No further arrival is required for this token.',
+      action: 'Completed',
+      className: 'bg-emerald-50 border-emerald-200 text-emerald-800',
+      accentClassName: 'bg-emerald-600',
+    }
+  }
+
+  const today = new Date().toISOString().slice(0, 10)
+  const isToday = booking.slotDate === today
+
+  if (isToday) {
+    return {
+      title: 'Stay ready for your turn',
+      description: 'Your token is in the live queue. Keep checking the queue position and proceed when the gate call is shown.',
+      action: 'Monitor queue',
+      className: 'bg-amber-50 border-amber-200 text-amber-800',
+      accentClassName: 'bg-amber-500',
+    }
+  }
+
+  return {
+    title: 'Plan for your booked slot',
+    description: `Your arrival window is ${booking.slotTimeStart}–${booking.slotTimeEnd}. Live queue guidance will become relevant on the booking date.`,
+    action: 'Plan arrival',
+    className: 'bg-emerald-50 border-emerald-200 text-emerald-800',
+    accentClassName: 'bg-emerald-600',
+  }
+}
+
 const getPredictedServiceTime = (
   booking: Booking,
   estimatedWaitMinutes: number
@@ -402,6 +475,53 @@ export const MyTokensView: React.FC<MyTokensViewProps> = ({
                             </p>
                           </div>
                         </>
+                      )
+                    })()}
+                  </div>
+                )}
+
+                {/* Smart Arrival Guidance */}
+                {booking.status !== 'completed' && (
+                  <div className="mt-3">
+                    {(() => {
+                      const guidance = getArrivalGuidance(
+                        booking,
+                        queueEntry
+                      )
+
+                      return (
+                        <div
+                          className={`rounded-2xl border p-3.5 ${guidance.className}`}
+                        >
+                          <div className="flex items-start gap-3">
+                            <div
+                              className={`w-9 h-9 rounded-xl text-white flex items-center justify-center shrink-0 ${guidance.accentClassName}`}
+                            >
+                              <MapPin className="w-4 h-4" />
+                            </div>
+
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center justify-between gap-3">
+                                <div>
+                                  <p className="text-[10px] uppercase tracking-wider font-black">
+                                    Arrival Guidance
+                                  </p>
+                                  <p className="text-sm font-black mt-0.5">
+                                    {guidance.title}
+                                  </p>
+                                </div>
+
+                                <span className="shrink-0 rounded-full bg-white/80 border border-current/10 px-2.5 py-1 text-[9px] font-black uppercase">
+                                  {guidance.action}
+                                </span>
+                              </div>
+
+                              <p className="text-xs mt-1.5 leading-relaxed opacity-80">
+                                {guidance.description}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
                       )
                     })()}
                   </div>
