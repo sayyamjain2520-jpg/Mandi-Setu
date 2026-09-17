@@ -89,7 +89,7 @@ export const AdminDashboard: React.FC = () => {
             <span>CENTRAL APMC PROCUREMENT DIRECTORATE</span>
           </div>
           <h1 className="text-xl sm:text-2xl font-black text-white">
-            Mandi Setu AI — Operations & Analytics Console
+            Mandi Setu — Operations & Analytics Console
           </h1>
           <p className="text-xs text-slate-400 mt-0.5">
             Real-time state monitoring, capacity utilization, queue latencies & DBT payout reconciliation

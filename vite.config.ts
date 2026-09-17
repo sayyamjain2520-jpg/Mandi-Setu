@@ -11,9 +11,9 @@ export default defineConfig({
     tailwindcss(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.svg', 'icons.svg'],
+      includeAssets: ['favicon.svg', 'icons.svg', 'mandi-setu-logo.png'],
       manifest: {
-        name: 'MANDI SETU AI - Smart Agricultural Procurement',
+        name: 'MANDI SETU - Smart Agricultural Procurement',
         short_name: 'Mandi Setu',
         description: 'Smart Agricultural Procurement & Real-Time Queue Management Platform',
         theme_color: '#15803d',
@@ -23,9 +23,9 @@ export default defineConfig({
         start_url: '/',
         icons: [
           {
-            src: '/favicon.svg',
+            src: '/mandi-setu-logo.png',
             sizes: '192x192 512x512',
-            type: 'image/svg+xml',
+            type: 'image/png',
             purpose: 'any maskable',
           },
         ],

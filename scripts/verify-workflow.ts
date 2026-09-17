@@ -1,10 +1,10 @@
-// End-to-End Workflow Verification Test for Mandi Setu AI
+// End-to-End Workflow Verification Test for Mandi Setu
 import { localStore } from '../src/services/mock/localStore'
 import { api } from '../src/services/api'
 
 async function runVerification() {
   console.log('====================================================')
-  console.log('🚀 MANDI SETU AI — END-TO-END WORKFLOW VERIFICATION')
+  console.log('🚀 MANDI SETU — END-TO-END WORKFLOW VERIFICATION')
   console.log('====================================================\n')
 
   // Step 1: Initial State Inspection

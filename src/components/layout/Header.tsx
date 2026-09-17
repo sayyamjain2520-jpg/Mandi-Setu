@@ -3,7 +3,6 @@ import { useAuth } from '@/context/AuthContext'
 import { useNotifications } from '@/context/NotificationContext'
 import { NotificationModal } from '@/components/feedback/NotificationModal'
 import {
-  Wheat,
   Bell,
   Smartphone,
   UserCheck,
@@ -37,13 +36,15 @@ export const Header: React.FC = () => {
         <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
           {/* Logo & Brand */}
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-800 to-emerald-600 flex items-center justify-center text-white shadow-sm shadow-emerald-700/30 ring-2 ring-emerald-500/20">
-              <Wheat className="w-5 h-5" />
-            </div>
+            <img
+              src="/mandi-setu-logo.png"
+              alt="Mandi Setu"
+              className="w-10 h-10 rounded-xl object-contain shadow-sm ring-2 ring-emerald-500/20"
+            />
             <div>
               <div className="flex items-center gap-2">
                 <span className="font-black text-base tracking-tight text-slate-900 uppercase font-mono">
-                  MANDI SETU <span className="text-emerald-700">AI</span>
+                  MANDI SETU
                 </span>
                 <span className="hidden sm:inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 uppercase">
                   Govt of India APMC

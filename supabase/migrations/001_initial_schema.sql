@@ -1,4 +1,4 @@
--- MANDI SETU AI: Production PostgreSQL / Supabase Schema Migration
+-- MANDI SETU: Production PostgreSQL / Supabase Schema Migration
 -- Includes: Profiles, Mandis, Commodities, Time Slots, Bookings, Queues, Procurement, Notifications,
 -- Triggers for Auth synchronization, Row Level Security (RLS), and Realtime Publications.
 
