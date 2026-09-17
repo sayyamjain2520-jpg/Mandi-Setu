@@ -40,6 +40,14 @@ export const SlotBookingWizard: React.FC<SlotBookingWizardProps> = ({
   const [selectedSlotId, setSelectedSlotId] = useState<string>('')
   const [liveSlots, setLiveSlots] = useState<TimeSlot[]>(slots)
 
+  // Admin-controlled Mandi status. A closed/inactive Mandi must not expose
+  // booking dates or time windows and must reject new bookings.
+  const selectedCentre = centres.find((c) => c.id === centreId)
+  const centreOperationalStatus = String(
+    (selectedCentre as ProcurementCentre & { operationalStatus?: string })?.operationalStatus ?? ''
+  ).toLowerCase()
+  const isCentreActive = centreOperationalStatus === 'active'
+
   useEffect(() => {
   setLiveSlots(slots)
 }, [slots])
@@ -48,7 +56,11 @@ useEffect(() => {
   let active = true
 
   const refreshSlots = async () => {
-    if (!centreId || !slotDate) return
+    if (!centreId || !slotDate || !isCentreActive) {
+      setLiveSlots([])
+      setSelectedSlotId('')
+      return
+    }
 
     try {
       const freshSlots = await api.getSlots(centreId, slotDate)
@@ -71,7 +83,7 @@ useEffect(() => {
     active = false
     unsubscribe()
   }
-}, [centreId, slotDate])
+}, [centreId, slotDate, isCentreActive])
 
   // Estimated quantity in quintals
   const [estimatedQuantity, setEstimatedQuantity] =
@@ -118,6 +130,12 @@ useEffect(() => {
     setError(null)
   }
 
+  const handleCentreChange = (value: string) => {
+    setCentreId(value)
+    setSelectedSlotId('')
+    setError(null)
+  }
+
   // Estimated value at MSP
   const estimatedMspValue =
     selectedCommodity
@@ -130,6 +148,11 @@ useEffect(() => {
 
     if (!centreId) {
       setError('Please select a Mandi Procurement Centre.')
+      return
+    }
+
+    if (!isCentreActive) {
+      setError('This procurement centre is currently closed and is not accepting new bookings.')
       return
     }
 
@@ -229,9 +252,7 @@ useEffect(() => {
             label="1. Select Mandi Procurement Centre"
             value={centreId}
             onChange={(e) => {
-              setCentreId(e.target.value)
-              setSelectedSlotId('')
-              setError(null)
+              handleCentreChange(e.target.value)
             }}
             options={centres.map((c) => ({
               label: `${c.name} (${c.district}, ${c.state})`,
@@ -292,86 +313,102 @@ useEffect(() => {
         </Card>
 
         {/* Step 2: Date & Time Window */}
-        <Card className="p-4 border-slate-200 space-y-4">
-          <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-2">
-              3. Select Booking Date
-            </label>
+        {isCentreActive ? (
+          <Card className="p-4 border-slate-200 space-y-4">
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-2">
+                3. Select Booking Date
+              </label>
 
-            <Input
-              type="date"
-              value={slotDate}
-              min={today}
-              onChange={(e) => handleDateChange(e.target.value)}
-            />
+              <Input
+                type="date"
+                value={slotDate}
+                min={today}
+                onChange={(e) => handleDateChange(e.target.value)}
+              />
 
-            <p className="text-[11px] text-slate-400 mt-1">
-              Select the date when your vehicle(s) will arrive at the Mandi.
-            </p>
-          </div>
+              <p className="text-[11px] text-slate-400 mt-1">
+                Select the date when your vehicle(s) will arrive at the Mandi.
+              </p>
+            </div>
 
-          <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-2">
-              4. Choose Time Window
-            </label>
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 mb-2">
+                4. Choose Time Window
+              </label>
 
-            {availableSlots.length === 0 ? (
-              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 text-sm text-slate-500 text-center">
-                No time slots available for this Mandi on {slotDate}.
-              </div>
-            ) : (
-              <div className="grid grid-cols-2 gap-2">
-                {availableSlots.map((slot) => {
-                  const isSelected =
-                    selectedSlotId === slot.id ||
-                    (!selectedSlotId && slot === availableSlots[0])
+              {availableSlots.length === 0 ? (
+                <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 text-sm text-slate-500 text-center">
+                  No time slots available for this Mandi on {slotDate}.
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-2">
+                  {availableSlots.map((slot) => {
+                    const isSelected =
+                      selectedSlotId === slot.id ||
+                      (!selectedSlotId && slot === availableSlots[0])
 
-                  const remaining = Math.max(
-                    0,
-                    slot.maxCapacityFarmers - slot.bookedCount
-                  )
+                    const remaining = Math.max(
+                      0,
+                      slot.maxCapacityFarmers - slot.bookedCount
+                    )
 
-                  const isFull = remaining <= 0
+                    const isFull = remaining <= 0
 
-                  return (
-                    <button
-                      type="button"
-                      key={slot.id}
-                      disabled={isFull}
-                      onClick={() => setSelectedSlotId(slot.id)}
-                      className={`p-3 rounded-xl border text-left transition-all ${
-                        isFull
-                          ? 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
-                          : isSelected
-                            ? 'bg-emerald-800 text-white border-emerald-800 ring-2 ring-emerald-600/30'
-                            : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
-                      }`}
-                    >
-                      <div className="flex items-center gap-1.5 text-xs font-bold">
-                        <Clock className="w-3.5 h-3.5" />
-                        <span>
-                          {slot.startTime} - {slot.endTime}
-                        </span>
-                      </div>
-
-                      <span
-                        className={`text-[10px] mt-1 block ${
+                    return (
+                      <button
+                        type="button"
+                        key={slot.id}
+                        disabled={isFull}
+                        onClick={() => setSelectedSlotId(slot.id)}
+                        className={`p-3 rounded-xl border text-left transition-all ${
                           isFull
-                            ? 'text-slate-400'
+                            ? 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
                             : isSelected
-                              ? 'text-emerald-200'
-                              : 'text-slate-500'
+                              ? 'bg-emerald-800 text-white border-emerald-800 ring-2 ring-emerald-600/30'
+                              : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
                         }`}
                       >
-                        {isFull ? 'Slot full' : `${remaining} gate slots open`}
-                      </span>
-                    </button>
-                  )
-                })}
+                        <div className="flex items-center gap-1.5 text-xs font-bold">
+                          <Clock className="w-3.5 h-3.5" />
+                          <span>
+                            {slot.startTime} - {slot.endTime}
+                          </span>
+                        </div>
+
+                        <span
+                          className={`text-[10px] mt-1 block ${
+                            isFull
+                              ? 'text-slate-400'
+                              : isSelected
+                                ? 'text-emerald-200'
+                                : 'text-slate-500'
+                          }`}
+                        >
+                          {isFull ? 'Slot full' : `${remaining} gate slots open`}
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          </Card>
+        ) : (
+          <Card className="p-5 border-red-200 bg-red-50">
+            <div className="flex items-start gap-3">
+              <div className="mt-0.5 w-3 h-3 rounded-full bg-red-500 shrink-0" />
+              <div>
+                <h3 className="text-sm font-bold text-red-800">
+                  Procurement Centre Closed
+                </h3>
+                <p className="text-xs text-red-700 mt-1">
+                  {selectedCentre?.name || 'This Mandi'} is currently closed and is not accepting new bookings.
+                </p>
               </div>
-            )}
-          </div>
-        </Card>
+            </div>
+          </Card>
+        )}
 
         {/* Step 3: Quantity & Vehicle */}
         <Card className="p-4 space-y-3.5 border-slate-200">
@@ -539,6 +576,7 @@ useEffect(() => {
             type="submit"
             variant="primary"
             isLoading={isSubmitting}
+            disabled={!isCentreActive}
             leftIcon={
               <CheckCircle2 className="w-4 h-4" />
             }
