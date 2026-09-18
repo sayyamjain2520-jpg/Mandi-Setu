@@ -43,6 +43,14 @@ export const OperatorDashboard: React.FC = () => {
     text: string
   } | null>(null)
 
+  // Inline action feedback: FIFO / queue-order messages stay next to
+  // the button that triggered the action instead of appearing as a
+  // technical banner at the top of the dashboard.
+  const [queueActionToast, setQueueActionToast] = useState<{
+    queueId: string
+    text: string
+  } | null>(null)
+
   const [isCallingNext, setIsCallingNext] = useState(false)
   const [isWeighing, setIsWeighing] = useState(false)
   const [processingBookingId, setProcessingBookingId] =
@@ -299,6 +307,7 @@ export const OperatorDashboard: React.FC = () => {
   ) => {
     try {
       setFeedbackMessage(null)
+      setQueueActionToast(null)
 
       await api.updateQueueStage(queueId, stage)
 
@@ -311,12 +320,37 @@ export const OperatorDashboard: React.FC = () => {
     } catch (error) {
       console.error('Failed to update queue stage:', error)
 
+      const errorText =
+        error instanceof Error
+          ? error.message
+          : 'Failed to update queue stage.'
+
+      // Keep FIFO guidance local to the queue card that triggered it.
+      if (errorText.toLowerCase().includes('fifo queue rule')) {
+        const tokenMatch = errorText.match(
+          /Token\s+([A-Z0-9-]+)\s+must be completed or marked No Show before Token\s+([A-Z0-9-]+)\s+can proceed/i
+        )
+
+        const earlierToken = tokenMatch?.[1] || 'the earlier token'
+
+        setQueueActionToast({
+          queueId,
+          text: `Please process ${earlierToken} first. This farmer is ahead in the queue.`,
+        })
+
+        window.setTimeout(() => {
+          setQueueActionToast((current) =>
+            current?.queueId === queueId ? null : current
+          )
+        }, 5000)
+
+        return
+      }
+
+      // Other errors can still use the normal dashboard feedback banner.
       setFeedbackMessage({
         type: 'error',
-        text:
-          error instanceof Error
-            ? error.message
-            : 'Failed to update queue stage.',
+        text: errorText,
       })
     }
   }
@@ -1042,6 +1076,31 @@ export const OperatorDashboard: React.FC = () => {
 
                     {/* Operational Buttons */}
                     <div className="flex flex-wrap items-center gap-2 pt-2 lg:pt-0 border-t lg:border-t-0 border-slate-100">
+
+                      {/* Inline queue-order feedback */}
+                      {queueActionToast?.queueId === entry.id && (
+                        <div className="basis-full flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-900">
+                          <AlertCircle className="w-4 h-4 shrink-0 text-amber-600 mt-0.5" />
+
+                          <div className="min-w-0">
+                            <p className="font-black">
+                              Please process the earlier token first
+                            </p>
+                            <p className="mt-0.5 text-amber-800">
+                              {queueActionToast.text}
+                            </p>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => setQueueActionToast(null)}
+                            className="ml-auto font-bold text-amber-700 hover:text-amber-900"
+                            aria-label="Dismiss"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      )}
 
                       {/* Waiting -> Called */}
                       {entry.currentStage ===
