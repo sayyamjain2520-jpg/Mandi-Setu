@@ -1129,21 +1129,76 @@ class DataService implements IDataService {
     return localStore.checkInAtGate(tokenOrBookingNumber)
   }
 
+  /**
+   * Enforce FIFO processing for a mandi queue.
+   *
+   * A later token can move into an active processing stage only when there
+   * is no earlier active token. A token explicitly marked `no_show` is an
+   * allowed exception and is therefore ignored as a blocker.
+   */
+  private async assertFifoOrder(
+    centreId: string,
+    targetQueueId: string
+  ): Promise<void> {
+    const client = supabase
+
+    if (!this.isCloudMode() || !client) {
+      return
+    }
+
+    const { data: target, error: targetError } = await client
+      .from('queue_entries')
+      .select('id, centre_id, priority_order, current_stage, token_number')
+      .eq('id', targetQueueId)
+      .single()
+
+    if (targetError || !target) {
+      throw new Error(targetError?.message || 'Queue entry not found')
+    }
+
+    if (target.centre_id !== centreId) {
+      throw new Error('Queue entry does not belong to this mandi')
+    }
+
+    // Settled and No Show entries do not need FIFO protection.
+    if (
+      target.current_stage === 'settled' ||
+      target.current_stage === 'no_show'
+    ) {
+      return
+    }
+
+    const { data: blockers, error: blockerError } = await client
+      .from('queue_entries')
+      .select('id, token_number, priority_order, current_stage')
+      .eq('centre_id', centreId)
+      .lt('priority_order', target.priority_order)
+      .not('current_stage', 'in', '(settled,no_show)')
+      .order('priority_order', { ascending: true })
+      .limit(1)
+
+    if (blockerError) {
+      throw new Error(
+        `Unable to verify FIFO queue order: ${blockerError.message}`
+      )
+    }
+
+    if (blockers && blockers.length > 0) {
+      const blocker = blockers[0]
+      throw new Error(
+        `FIFO queue rule: Token ${blocker.token_number} must be completed or marked No Show before Token ${target.token_number} can proceed.`
+      )
+    }
+  }
+
   public async callNextInQueue(centreId: string): Promise<{ success: boolean; entry?: QueueEntry; message: string }> {
     const client = supabase
     if (this.isCloudMode() && client) {
       const { data: eligible } = await client
         .from('queue_entries')
-        .select(`
-  *,
-  bookings(
-    *,
-    profiles:profiles!bookings_farmer_id_fkey(full_name, phone_number),
-    commodities:commodities!bookings_commodity_id_fkey(name)
-  )
-`)
+        .select('*, bookings(*, profiles:profiles!bookings_farmer_id_fkey(full_name, phone_number))')
         .eq('centre_id', centreId)
-        .in('current_stage', ['waiting', 'gate_passed'])
+        .eq('current_stage', 'waiting')
         .order('priority_order', { ascending: true })
         .limit(1)
 
@@ -1231,6 +1286,31 @@ if (bookingUpdateError) {
   public async updateQueueStage(queueId: string, stage: QueueStage): Promise<void> {
     const client = supabase
     if (this.isCloudMode() && client) {
+      const { data: currentEntry, error: currentEntryError } = await client
+        .from('queue_entries')
+        .select('id, centre_id, current_stage')
+        .eq('id', queueId)
+        .single()
+
+      if (currentEntryError || !currentEntry) {
+        throw new Error(
+          currentEntryError?.message || 'Queue entry not found'
+        )
+      }
+
+      // No Show is an explicit FIFO exception. Waiting is also allowed
+      // because it does not advance the farmer through the workflow.
+      if (
+        stage !== 'waiting' &&
+        stage !== 'no_show' &&
+        stage !== currentEntry.current_stage
+      ) {
+        await this.assertFifoOrder(
+          currentEntry.centre_id,
+          queueId
+        )
+      }
+
       const { error } = await client
         .from('queue_entries')
         .update({ current_stage: stage, updated_at: new Date().toISOString() })
@@ -1259,6 +1339,23 @@ if (bookingUpdateError) {
         .single()
 
       if (!booking) throw new Error('Booking not found')
+
+      const { data: queueEntry, error: queueEntryError } = await client
+        .from('queue_entries')
+        .select('id, centre_id')
+        .eq('booking_id', params.bookingId)
+        .single()
+
+      if (queueEntryError || !queueEntry) {
+        throw new Error(
+          queueEntryError?.message || 'Queue entry not found'
+        )
+      }
+
+      await this.assertFifoOrder(
+        queueEntry.centre_id,
+        queueEntry.id
+      )
 
       const ratePerQuintal = Number(booking.commodities?.msp_price_per_quintal) || 2275.0
       const netWeightKg = Math.max(0, params.grossWeightKg - params.tareWeightKg)
@@ -1356,6 +1453,23 @@ await client
       if (bookingError || !booking) {
         throw new Error(bookingError?.message || 'Booking not found')
       }
+
+      const { data: queueEntry, error: queueEntryError } = await client
+        .from('queue_entries')
+        .select('id, centre_id')
+        .eq('booking_id', bookingId)
+        .single()
+
+      if (queueEntryError || !queueEntry) {
+        throw new Error(
+          queueEntryError?.message || 'Queue entry not found'
+        )
+      }
+
+      await this.assertFifoOrder(
+        queueEntry.centre_id,
+        queueEntry.id
+      )
 
       const { error: recordError } = await client
         .from('procurement_records')
