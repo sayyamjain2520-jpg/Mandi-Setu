@@ -1,6 +1,9 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import type { Booking, QueueEntry, QueueStage } from '@/types/procurement.types'
+import type { ProcurementCentre } from '@/types/mandi.types'
 import { TokenQRPass } from '@/components/qr/TokenQRPass'
+import { MandiRouteMap } from '@/components/maps/MandiRouteMap'
+import { api } from '@/services/api'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { StatusPill } from '@/components/ui/Badge'
@@ -235,12 +238,100 @@ const getPredictedServiceTime = (
   })
 }
 
+const getLiveQueueStatus = (stage?: QueueStage) => {
+  switch (stage) {
+    case 'called_to_gate':
+      return {
+        label: 'Your token has been called',
+        description: 'Please proceed to the mandi gate and keep your digital pass ready.',
+        className: 'bg-rose-50 border-rose-200 text-rose-800',
+        dotClassName: 'bg-rose-500',
+      }
+    case 'gate_passed':
+      return {
+        label: 'Inside Mandi',
+        description: 'Your vehicle has entered the yard and is moving through procurement.',
+        className: 'bg-blue-50 border-blue-200 text-blue-800',
+        dotClassName: 'bg-blue-500',
+      }
+    case 'quality_check':
+      return {
+        label: 'Quality inspection in progress',
+        description: 'Your crop is currently being inspected by the procurement team.',
+        className: 'bg-violet-50 border-violet-200 text-violet-800',
+        dotClassName: 'bg-violet-500',
+      }
+    case 'weighbridge':
+      return {
+        label: 'Weighment in progress',
+        description: 'Your vehicle is at the weighbridge for official weighing.',
+        className: 'bg-blue-50 border-blue-200 text-blue-800',
+        dotClassName: 'bg-blue-500',
+      }
+    case 'unloading':
+      return {
+        label: 'Unloading in progress',
+        description: 'Your crop is being unloaded at the procurement centre.',
+        className: 'bg-amber-50 border-amber-200 text-amber-800',
+        dotClassName: 'bg-amber-500',
+      }
+    case 'settled':
+      return {
+        label: 'Procurement completed',
+        description: 'Your procurement has been completed and the receipt has been issued.',
+        className: 'bg-emerald-50 border-emerald-200 text-emerald-800',
+        dotClassName: 'bg-emerald-500',
+      }
+    case 'no_show':
+      return {
+        label: 'Marked as No Show',
+        description: 'This token was marked as no-show by the mandi operator.',
+        className: 'bg-slate-100 border-slate-200 text-slate-700',
+        dotClassName: 'bg-slate-500',
+      }
+    case 'waiting':
+    default:
+      return {
+        label: 'Waiting for your turn',
+        description: 'Stay ready and watch your live queue position for the next gate call.',
+        className: 'bg-amber-50 border-amber-200 text-amber-800',
+        dotClassName: 'bg-amber-500',
+      }
+  }
+}
+
 export const MyTokensView: React.FC<MyTokensViewProps> = ({
   bookings,
   queueEntries,
   onBookNewSlot,
 }) => {
   const [expandedBookingId, setExpandedBookingId] = useState<string>('')
+  const [centresByBookingId, setCentresByBookingId] = useState<Record<string, ProcurementCentre | undefined>>({})
+
+  useEffect(() => {
+    let active = true
+
+    const loadCentres = async () => {
+      try {
+        const centres = await api.getCentres()
+        if (!active) return
+
+        const next: Record<string, ProcurementCentre | undefined> = {}
+        bookings.forEach((booking) => {
+          next[booking.id] = centres.find((centre) => centre.id === booking.centreId)
+        })
+        setCentresByBookingId(next)
+      } catch (error) {
+        console.error('Failed to load mandi locations:', error)
+      }
+    }
+
+    if (bookings.length > 0) loadCentres()
+
+    return () => {
+      active = false
+    }
+  }, [bookings])
 
   if (bookings.length === 0) {
     return (
@@ -371,6 +462,123 @@ export const MyTokensView: React.FC<MyTokensViewProps> = ({
                     )}
                   </div>
                 </div>
+
+                {/* Live Queue Status */}
+                {queueEntry && booking.status !== 'completed' && (
+                  <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                    {(() => {
+                      const liveStatus = getLiveQueueStatus(
+                        queueEntry.currentStage
+                      )
+                      const queuePosition = Math.max(
+                        1,
+                        Number(queueEntry.priorityOrder) || 1
+                      )
+                      const farmersAhead = Math.max(
+                        0,
+                        queuePosition - 1
+                      )
+
+                      const progressIndex = Math.max(
+                        0,
+                        Math.min(
+                          TRACKING_STAGES.length - 1,
+                          getStageIndex(queueEntry.currentStage)
+                        )
+                      )
+                      const progressPercent =
+                        (progressIndex /
+                          Math.max(1, TRACKING_STAGES.length - 1)) *
+                        100
+
+                      return (
+                        <>
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span
+                                  className={`w-2.5 h-2.5 rounded-full shrink-0 ${liveStatus.dotClassName} ${
+                                    queueEntry.currentStage ===
+                                      'called_to_gate' ||
+                                    queueEntry.currentStage === 'waiting'
+                                      ? 'animate-pulse'
+                                      : ''
+                                  }`}
+                                />
+                                <p className="text-[10px] uppercase tracking-wider font-black text-slate-400">
+                                  Live Queue Status
+                                </p>
+                              </div>
+
+                              <p className="text-base font-black text-slate-900 mt-1">
+                                {liveStatus.label}
+                              </p>
+                              <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                                {liveStatus.description}
+                              </p>
+                            </div>
+
+                            <span
+                              className={`shrink-0 rounded-full border px-2.5 py-1 text-[9px] font-black uppercase ${liveStatus.className}`}
+                            >
+                              LIVE
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2 mt-4">
+                            <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-3">
+                              <p className="text-[9px] uppercase font-bold tracking-wide text-emerald-700">
+                                Queue Position
+                              </p>
+                              <p className="text-2xl font-black text-slate-900 mt-1">
+                                #{queuePosition}
+                              </p>
+                              <p className="text-[9px] text-slate-500 mt-0.5">
+                                your token
+                              </p>
+                            </div>
+
+                            <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                              <p className="text-[9px] uppercase font-bold tracking-wide text-slate-400">
+                                Farmers Ahead
+                              </p>
+                              <p className="text-2xl font-black text-slate-900 mt-1">
+                                {farmersAhead}
+                              </p>
+                              <p className="text-[9px] text-slate-500 mt-0.5">
+                                before your turn
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="mt-4">
+                            <div className="flex items-center justify-between text-[9px] font-bold text-slate-400">
+                              <span>Procurement Progress</span>
+                              <span>{Math.round(progressPercent)}%</span>
+                            </div>
+
+                            <div className="mt-2 h-2 rounded-full bg-slate-100 overflow-hidden">
+                              <div
+                                className="h-full rounded-full bg-emerald-500 transition-all duration-500"
+                                style={{
+                                  width: `${progressPercent}%`,
+                                }}
+                              />
+                            </div>
+
+                            <div className="flex justify-between mt-2 text-[8px] font-semibold text-slate-400">
+                              <span>Queue</span>
+                              <span>Gate</span>
+                              <span>QC</span>
+                              <span>Weight</span>
+                              <span>Done</span>
+                            </div>
+                          </div>
+                        </>
+                      )
+                    })()}
+                  </div>
+                )}
 
                 {/* Smart Arrival */}
                 {queueEntry && booking.status !== 'completed' && (
@@ -599,6 +807,48 @@ export const MyTokensView: React.FC<MyTokensViewProps> = ({
                       </div>
                     </div>
                   </div>
+
+                  {/* Real GPS route */}
+                  {(() => {
+                    const centre = centresByBookingId[booking.id]
+                    const hasValidCoordinates =
+                      Number.isFinite(Number(centre?.latitude)) &&
+                      Number.isFinite(Number(centre?.longitude)) &&
+                      Number(centre?.latitude) !== 0 &&
+                      Number(centre?.longitude) !== 0
+
+                    if (!centre || !hasValidCoordinates) {
+                      return (
+                        <div className="bg-white rounded-2xl border border-slate-200 p-4 mb-4">
+                          <div className="flex items-start gap-3">
+                            <div className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center shrink-0">
+                              <MapPin className="w-4 h-4" />
+                            </div>
+                            <div>
+                              <p className="text-[10px] uppercase tracking-wider font-black text-emerald-700">
+                                Live Route
+                              </p>
+                              <p className="text-xs font-bold text-slate-800 mt-1">
+                                Mandi location is not configured yet.
+                              </p>
+                              <p className="text-[10px] text-slate-500 mt-1">
+                                Add the real latitude and longitude for this procurement centre to enable GPS routing.
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      )
+                    }
+
+                    return (
+                      <MandiRouteMap
+                        centreName={centre.name}
+                        destinationLat={Number(centre.latitude)}
+                        destinationLon={Number(centre.longitude)}
+                        className="mb-4"
+                      />
+                    )
+                  })()}
 
                   {/* Timeline */}
                   <div className="bg-white rounded-2xl border border-slate-200 p-5">
