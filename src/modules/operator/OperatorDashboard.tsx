@@ -583,6 +583,54 @@ export const OperatorDashboard: React.FC = () => {
   )
 
   // ------------------------------------------------------------
+  // Visual FIFO queue order
+  // ------------------------------------------------------------
+  const orderedActiveQueue = [...queue]
+    .filter(
+      (q) =>
+        q.currentStage !== 'settled' &&
+        q.currentStage !== 'no_show'
+    )
+    .sort((a, b) => {
+      // QueueEntry does not expose createdAt. FIFO tokens are sequential,
+      // so use the numeric token order as the visual queue order.
+      const aToken = Number.parseInt(
+        String(a.tokenNumber).replace(/\D/g, ''),
+        10
+      )
+      const bToken = Number.parseInt(
+        String(b.tokenNumber).replace(/\D/g, ''),
+        10
+      )
+
+      if (Number.isFinite(aToken) && Number.isFinite(bToken)) {
+        return aToken - bToken
+      }
+
+      return String(a.tokenNumber).localeCompare(
+        String(b.tokenNumber),
+        undefined,
+        { numeric: true }
+      )
+    })
+
+  const activeQueuePosition = new Map(
+    orderedActiveQueue.map((entry, index) => [
+      entry.id,
+      index + 1,
+    ])
+  )
+
+  const currentServingEntry = orderedActiveQueue.find(
+    (entry) =>
+      entry.currentStage === 'called_to_gate' ||
+      entry.currentStage === 'gate_passed' ||
+      entry.currentStage === 'quality_check' ||
+      entry.currentStage === 'weighbridge' ||
+      entry.currentStage === 'unloading'
+  )
+
+  // ------------------------------------------------------------
   // UI
   // ------------------------------------------------------------
   return (
@@ -998,10 +1046,14 @@ export const OperatorDashboard: React.FC = () => {
                 <Card
                   key={entry.id}
                   className={`p-4 border transition-all ${
-                    entry.currentStage ===
-                    'called_to_gate'
-                      ? 'border-rose-400 bg-rose-50/40 ring-2 ring-rose-500/10'
-                      : 'border-slate-200'
+                    activeQueuePosition.get(entry.id) === 1 &&
+                    entry.currentStage === 'waiting'
+                      ? 'border-emerald-300 bg-emerald-50/30 ring-2 ring-emerald-500/10'
+                      : currentServingEntry?.id === entry.id
+                        ? 'border-blue-300 bg-blue-50/30 ring-2 ring-blue-500/10'
+                        : entry.currentStage === 'called_to_gate'
+                          ? 'border-rose-400 bg-rose-50/40 ring-2 ring-rose-500/10'
+                          : 'border-slate-200'
                   }`}
                 >
 
@@ -1023,6 +1075,54 @@ export const OperatorDashboard: React.FC = () => {
                       </div>
 
                       <div>
+
+                        {(() => {
+                          const position = activeQueuePosition.get(entry.id)
+                          const isCurrentServing =
+                            currentServingEntry?.id === entry.id
+                          const isNextToBeCalled =
+                            position === 1 &&
+                            entry.currentStage === 'waiting'
+
+                          return (
+                            <div className="mb-2 flex flex-wrap items-center gap-2">
+                              {position && (
+                                <span
+                                  className={`inline-flex items-center rounded-lg border px-2 py-1 text-[10px] font-black uppercase tracking-wide ${
+                                    isNextToBeCalled
+                                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                      : isCurrentServing
+                                        ? 'bg-blue-50 text-blue-700 border-blue-200'
+                                        : 'bg-slate-100 text-slate-600 border-slate-200'
+                                  }`}
+                                >
+                                  #{position}
+                                </span>
+                              )}
+
+                              {isNextToBeCalled && (
+                                <span className="inline-flex items-center rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] font-black uppercase tracking-wide text-emerald-700">
+                                  🟢 Next to be called
+                                </span>
+                              )}
+
+                              {isCurrentServing && (
+                                <span className="inline-flex items-center rounded-lg border border-blue-200 bg-blue-50 px-2 py-1 text-[10px] font-black uppercase tracking-wide text-blue-700">
+                                  🔵 Currently serving
+                                </span>
+                              )}
+
+                              {position &&
+                                entry.currentStage === 'waiting' &&
+                                position > 1 && (
+                                  <span className="text-[10px] font-semibold text-slate-500">
+                                    ⏳ {position - 1} farmer
+                                    {position - 1 === 1 ? '' : 's'} ahead
+                                  </span>
+                                )}
+                            </div>
+                          )
+                        })()}
 
                         <div className="flex items-center gap-2">
 
