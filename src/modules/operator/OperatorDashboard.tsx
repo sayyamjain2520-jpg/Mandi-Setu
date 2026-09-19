@@ -10,7 +10,6 @@ import type {
 import type { ProcurementCentre } from '@/types/mandi.types'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
-import { Select } from '@/components/ui/Input'
 import { StatusPill } from '@/components/ui/Badge'
 import { GateScanner } from '@/components/qr/GateScanner'
 import { ProcurementEntryModal } from '@/modules/operator/components/ProcurementEntryModal'
@@ -27,9 +26,7 @@ import {
 export const OperatorDashboard: React.FC = () => {
   const { user } = useAuth()
 
-  const [centres, setCentres] = useState<ProcurementCentre[]>([])
   const [centre, setCentre] = useState<ProcurementCentre | null>(null)
-  const [selectedCentreId, setSelectedCentreId] = useState<string>('')
   const [bookings, setBookings] = useState<Booking[]>([])
   const [queue, setQueue] = useState<QueueEntry[]>([])
   const [records, setRecords] = useState<ProcurementRecord[]>([])
@@ -57,71 +54,11 @@ export const OperatorDashboard: React.FC = () => {
     useState<string | null>(null)
 
   // ------------------------------------------------------------
-  // UUID validation
+  // Assigned mandi is the single source of truth.
+  // The operator never chooses a mandi from the UI.
+  // It comes from public.profiles.mandi_id loaded by AuthContext.
   // ------------------------------------------------------------
-  const isValidUUID = (value?: string | null) => {
-    if (!value) return false
-
-    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-      value
-    )
-  }
-
-  // ------------------------------------------------------------
-  // Load all procurement centres
-  // ------------------------------------------------------------
-  useEffect(() => {
-    let cancelled = false
-
-    const loadCentres = async () => {
-      try {
-        const data = await api.getCentres()
-
-        if (cancelled) return
-
-        console.log('OPERATOR CENTRES LOADED:', data)
-
-        setCentres(data)
-
-        if (data.length === 0) {
-          setSelectedCentreId('')
-          return
-        }
-
-        const preferredCentreId =
-          isValidUUID(user?.mandiId) &&
-          data.some((c) => c.id === user?.mandiId)
-            ? user!.mandiId!
-            : data[0].id
-
-        setSelectedCentreId((current) => {
-          if (current && data.some((c) => c.id === current)) {
-            return current
-          }
-
-          return preferredCentreId
-        })
-      } catch (error) {
-        console.error('Failed to load procurement centres:', error)
-
-        if (!cancelled) {
-          setFeedbackMessage({
-            type: 'error',
-            text:
-              error instanceof Error
-                ? error.message
-                : 'Failed to load procurement centres.',
-          })
-        }
-      }
-    }
-
-    loadCentres()
-
-    return () => {
-      cancelled = true
-    }
-  }, [user?.mandiId])
+  const assignedCentreId = user?.mandiId || ''
 
   // ------------------------------------------------------------
   // IMPORTANT:
@@ -162,7 +99,13 @@ export const OperatorDashboard: React.FC = () => {
         recordsCount: r.length,
       })
 
-      setCentre(c || null)
+      if (!c) {
+        throw new Error(
+          'The assigned procurement centre could not be found.'
+        )
+      }
+
+      setCentre(c)
       setBookings(b)
       setQueue(q)
       setRecords(r)
@@ -183,21 +126,25 @@ export const OperatorDashboard: React.FC = () => {
   }, [])
 
   // ------------------------------------------------------------
-  // Load data whenever selected mandi changes
+  // Load data whenever the authenticated operator's assigned mandi changes.
   // ------------------------------------------------------------
   useEffect(() => {
-    if (!selectedCentreId) {
+    if (!assignedCentreId) {
       setCentre(null)
       setBookings([])
       setQueue([])
       setRecords([])
+      setFeedbackMessage({
+        type: 'error',
+        text: 'No procurement centre is assigned to this operator account.',
+      })
       return
     }
 
-    const activeCentreId = selectedCentreId
+    const activeCentreId = assignedCentreId
 
     console.log(
-      'OPERATOR SELECTED CENTRE CHANGED:',
+      'OPERATOR ASSIGNED CENTRE ID:',
       activeCentreId
     )
 
@@ -205,7 +152,7 @@ export const OperatorDashboard: React.FC = () => {
 
     const unsubscribe = api.subscribe(() => {
       console.log(
-        'OPERATOR REALTIME REFRESH FOR CENTRE:',
+        'OPERATOR REALTIME REFRESH FOR ASSIGNED CENTRE:',
         activeCentreId
       )
 
@@ -215,16 +162,16 @@ export const OperatorDashboard: React.FC = () => {
     return () => {
       unsubscribe()
     }
-  }, [selectedCentreId, loadData])
+  }, [assignedCentreId, loadData])
 
   // ------------------------------------------------------------
   // Call next farmer in queue
   // ------------------------------------------------------------
   const handleCallNext = async () => {
-    if (!selectedCentreId) {
+    if (!assignedCentreId) {
       setFeedbackMessage({
         type: 'error',
-        text: 'Please select a mandi procurement centre first.',
+        text: 'No procurement centre is assigned to this operator account.',
       })
       return
     }
@@ -233,7 +180,7 @@ export const OperatorDashboard: React.FC = () => {
     setFeedbackMessage(null)
 
     try {
-      const res = await api.callNextInQueue(selectedCentreId)
+      const res = await api.callNextInQueue(assignedCentreId)
 
       if (res.success) {
         setFeedbackMessage({
@@ -241,7 +188,7 @@ export const OperatorDashboard: React.FC = () => {
           text: res.message,
         })
 
-        await loadData(selectedCentreId)
+        await loadData(assignedCentreId)
       } else {
         setFeedbackMessage({
           type: 'error',
@@ -278,7 +225,7 @@ export const OperatorDashboard: React.FC = () => {
           text: res.message,
         })
 
-        await loadData(selectedCentreId)
+        await loadData(assignedCentreId)
       } else {
         setFeedbackMessage({
           type: 'error',
@@ -316,7 +263,7 @@ export const OperatorDashboard: React.FC = () => {
         text: `Queue status updated to ${stage.replaceAll('_', ' ')}.`,
       })
 
-      await loadData(selectedCentreId)
+      await loadData(assignedCentreId)
     } catch (error) {
       console.error('Failed to update queue stage:', error)
 
@@ -414,7 +361,7 @@ export const OperatorDashboard: React.FC = () => {
 
       setSelectedBookingForWeighment(null)
 
-      await loadData(selectedCentreId)
+      await loadData(assignedCentreId)
     } catch (error) {
       console.error(
         'Failed to record procurement:',
@@ -450,7 +397,7 @@ export const OperatorDashboard: React.FC = () => {
           'Unloading completed successfully. Booking settled and receipt issued.',
       })
 
-      await loadData(selectedCentreId)
+      await loadData(assignedCentreId)
     } catch (error) {
       console.error(
         'Failed to complete unloading:',
@@ -488,7 +435,7 @@ export const OperatorDashboard: React.FC = () => {
           `Token ${acceptedBooking.tokenNumber || 'generated'} is now active.`,
       })
 
-      await loadData(selectedCentreId)
+      await loadData(assignedCentreId)
     } catch (error) {
       console.error(
         'Failed to accept booking:',
@@ -525,7 +472,7 @@ export const OperatorDashboard: React.FC = () => {
           'Booking request rejected successfully.',
       })
 
-      await loadData(selectedCentreId)
+      await loadData(assignedCentreId)
     } catch (error) {
       console.error(
         'Failed to reject booking:',
@@ -678,32 +625,31 @@ export const OperatorDashboard: React.FC = () => {
         </div>
       </div>
 
-      {/* Active Mandi Selector */}
+      {/* Assigned Mandi - read only */}
       <Card className="p-4 border-slate-200">
-        <Select
-          label="Select Mandi Procurement Centre"
-          value={selectedCentreId}
-          onChange={(e) => {
-            const newCentreId = e.target.value
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+              Assigned Mandi Procurement Centre
+            </span>
+            <h2 className="text-sm font-black text-slate-900 mt-1">
+              {centre?.name || 'Loading assigned mandi...'}
+            </h2>
+            <p className="text-[11px] text-slate-500 mt-0.5">
+              {centre
+                ? `${centre.code} • ${centre.district}, ${centre.state}`
+                : 'This operator can access only the procurement centre assigned by the administrator.'}
+            </p>
+          </div>
 
-            console.log(
-              'OPERATOR CENTRE CHANGED:',
-              newCentreId
-            )
+          <div className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold">
+            <Building2 className="w-4 h-4" />
+            Administrator Assigned
+          </div>
+        </div>
 
-            setSelectedCentreId(newCentreId)
-            setStageFilter('all')
-            setFeedbackMessage(null)
-          }}
-          options={centres.map((c) => ({
-            label: `${c.name} (${c.district}, ${c.state})`,
-            value: c.id,
-          }))}
-        />
-
-        <p className="text-[11px] text-slate-500 mt-2">
-          Queue, bookings, KPIs and gate operations below
-          show live Supabase data for the selected mandi.
+        <p className="text-[11px] text-slate-500 mt-3">
+          Queue, bookings, KPIs and gate operations below show live Supabase data only for this operator's assigned mandi.
         </p>
       </Card>
 

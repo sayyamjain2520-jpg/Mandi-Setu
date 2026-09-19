@@ -6,6 +6,7 @@ import { Card } from '@/components/ui/Card'
 import { CentreManagementTab } from '@/modules/admin/components/CentreManagementTab'
 import { CommodityManagerTab } from '@/modules/admin/components/CommodityManagerTab'
 import { AllBookingsLedgerTab } from '@/modules/admin/components/AllBookingsLedgerTab'
+import { OperatorManagementTab } from '@/modules/admin/components/OperatorManagementTab'
 import {
   BarChart3,
   Building2,
@@ -19,7 +20,7 @@ import {
   RefreshCw,
 } from 'lucide-react'
 
-type AdminTab = 'analytics' | 'centres' | 'commodities' | 'bookings'
+type AdminTab = 'analytics' | 'centres' | 'operators' | 'commodities' | 'bookings'
 
 export const AdminDashboard: React.FC = () => {
   const [activeTab, setActiveTab] = useState<AdminTab>('analytics')
@@ -31,6 +32,7 @@ export const AdminDashboard: React.FC = () => {
 
   const loadData = useCallback(async () => {
     setIsLoading(true)
+
     try {
       const [an, c, comm, b] = await Promise.all([
         api.getAdminAnalytics(),
@@ -38,6 +40,7 @@ export const AdminDashboard: React.FC = () => {
         api.getCommodities(),
         api.getBookings(),
       ])
+
       setAnalytics(an)
       setCentres(c)
       setCommodities(comm)
@@ -49,34 +52,60 @@ export const AdminDashboard: React.FC = () => {
 
   useEffect(() => {
     loadData()
+
     const unsubscribe = api.subscribe(() => {
       loadData()
     })
+
     return () => unsubscribe()
   }, [loadData])
 
-  const handleAddCentre = async (centreData: Omit<ProcurementCentre, 'id'>) => {
+  // Add new procurement centre
+  const handleAddCentre = async (
+    centreData: Omit<ProcurementCentre, 'id'>
+  ) => {
     await api.addCentre(centreData)
-    loadData()
+    await loadData()
   }
 
+  // Update existing procurement centre
+  const handleUpdateCentre = async (
+    id: string,
+    centreData: Partial<Omit<ProcurementCentre, 'id'>>
+  ) => {
+    await api.updateCentre(id, centreData)
+    await loadData()
+  }
+
+  // Toggle procurement centre status
   const handleToggleCentreStatus = async (
     id: string,
     currentStatus: ProcurementCentre['operationalStatus']
   ) => {
     const next = currentStatus === 'active' ? 'closed' : 'active'
-    await api.updateCentre(id, { operationalStatus: next })
-    loadData()
+
+    await api.updateCentre(id, {
+      operationalStatus: next,
+    })
+
+    await loadData()
   }
 
+  // Update commodity MSP
   const handleUpdateMsp = async (id: string, newMsp: number) => {
-    await api.updateCommodity(id, { mspPricePerQuintal: newMsp })
-    loadData()
+    await api.updateCommodity(id, {
+      mspPricePerQuintal: newMsp,
+    })
+
+    await loadData()
   }
 
-  const handleAddCommodity = async (commodityData: Omit<Commodity, 'id'>) => {
+  // Add new commodity
+  const handleAddCommodity = async (
+    commodityData: Omit<Commodity, 'id'>
+  ) => {
     await api.addCommodity(commodityData)
-    loadData()
+    await loadData()
   }
 
   return (
@@ -88,9 +117,11 @@ export const AdminDashboard: React.FC = () => {
             <ShieldCheck className="w-4 h-4" />
             <span>CENTRAL APMC PROCUREMENT DIRECTORATE</span>
           </div>
+
           <h1 className="text-xl sm:text-2xl font-black text-white">
             Mandi Setu — Operations & Analytics Console
           </h1>
+
           <p className="text-xs text-slate-400 mt-0.5">
             Real-time state monitoring, capacity utilization, queue latencies & DBT payout reconciliation
           </p>
@@ -101,7 +132,11 @@ export const AdminDashboard: React.FC = () => {
           className="self-start md:self-auto flex items-center gap-2 px-3 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-semibold transition"
           title="Refresh analytics"
         >
-          <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+          <RefreshCw
+            className={`w-3.5 h-3.5 ${
+              isLoading ? 'animate-spin' : ''
+            }`}
+          />
           <span>Refresh Feed</span>
         </button>
       </div>
@@ -109,10 +144,31 @@ export const AdminDashboard: React.FC = () => {
       {/* Admin Navigation Tabs */}
       <div className="flex items-center gap-2 overflow-x-auto pb-1 border-b border-slate-200">
         {[
-          { id: 'analytics' as AdminTab, label: 'Live Analytics & KPIs', icon: BarChart3 },
-          { id: 'centres' as AdminTab, label: 'Mandi Centres', icon: Building2 },
-          { id: 'commodities' as AdminTab, label: 'Commodities & MSP', icon: Wheat },
-          { id: 'bookings' as AdminTab, label: 'Statewide Ledger', icon: ListOrdered },
+          {
+            id: 'analytics' as AdminTab,
+            label: 'Live Analytics & KPIs',
+            icon: BarChart3,
+          },
+          {
+            id: 'centres' as AdminTab,
+            label: 'Mandi Centres',
+            icon: Building2,
+          },
+          {
+            id: 'operators' as AdminTab,
+            label: 'Operators',
+            icon: Users,
+          },
+          {
+            id: 'commodities' as AdminTab,
+            label: 'Commodities & MSP',
+            icon: Wheat,
+          },
+          {
+            id: 'bookings' as AdminTab,
+            label: 'Statewide Ledger',
+            icon: ListOrdered,
+          },
         ].map((tab) => {
           const Icon = tab.icon
           const isActive = activeTab === tab.id
@@ -137,27 +193,37 @@ export const AdminDashboard: React.FC = () => {
       {/* TAB CONTENT: ANALYTICS */}
       {activeTab === 'analytics' && analytics && (
         <div className="space-y-6">
-          {/* Executive KPI Cards (Calculated directly from live data) */}
+          {/* Executive KPI Cards */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             <Card className="p-4 border-slate-200">
               <div className="flex items-center justify-between text-slate-400 mb-2">
-                <span className="text-[10px] uppercase font-bold tracking-wider">Total Bookings</span>
+                <span className="text-[10px] uppercase font-bold tracking-wider">
+                  Total Bookings
+                </span>
                 <ListOrdered className="w-4 h-4 text-indigo-600" />
               </div>
+
               <span className="text-2xl font-black font-mono text-slate-900">
                 {analytics.totalBookings}
               </span>
-              <p className="text-[11px] text-slate-500 mt-1">Confirmed farmer tokens</p>
+
+              <p className="text-[11px] text-slate-500 mt-1">
+                Confirmed farmer tokens
+              </p>
             </Card>
 
             <Card className="p-4 border-slate-200">
               <div className="flex items-center justify-between text-slate-400 mb-2">
-                <span className="text-[10px] uppercase font-bold tracking-wider">Active Queue</span>
+                <span className="text-[10px] uppercase font-bold tracking-wider">
+                  Active Queue
+                </span>
                 <Clock className="w-4 h-4 text-amber-600" />
               </div>
+
               <span className="text-2xl font-black font-mono text-amber-600">
                 {analytics.activeQueueCount}
               </span>
+
               <p className="text-[11px] text-amber-700 mt-1">
                 Avg wait: ~{analytics.averageWaitTimeMinutes} mins
               </p>
@@ -165,34 +231,47 @@ export const AdminDashboard: React.FC = () => {
 
             <Card className="p-4 border-slate-200">
               <div className="flex items-center justify-between text-slate-400 mb-2">
-                <span className="text-[10px] uppercase font-bold tracking-wider">Farmers Served</span>
+                <span className="text-[10px] uppercase font-bold tracking-wider">
+                  Farmers Served
+                </span>
                 <Users className="w-4 h-4 text-emerald-600" />
               </div>
+
               <span className="text-2xl font-black font-mono text-emerald-700">
                 {analytics.farmersServedTotal}
               </span>
-              <p className="text-[11px] text-emerald-700 mt-1">Procurement slips completed</p>
+
+              <p className="text-[11px] text-emerald-700 mt-1">
+                Procurement slips completed
+              </p>
             </Card>
 
             <Card className="p-4 border-slate-200">
               <div className="flex items-center justify-between text-slate-400 mb-2">
-                <span className="text-[10px] uppercase font-bold tracking-wider">Capacity Intake</span>
+                <span className="text-[10px] uppercase font-bold tracking-wider">
+                  Capacity Intake
+                </span>
                 <TrendingUp className="w-4 h-4 text-blue-600" />
               </div>
+
               <span className="text-2xl font-black font-mono text-blue-700">
                 {analytics.capacityUtilisationPercentage}%
               </span>
-              <p className="text-[11px] text-slate-500 mt-1">Of state daily quota</p>
+
+              <p className="text-[11px] text-slate-500 mt-1">
+                Of state daily quota
+              </p>
             </Card>
           </div>
 
-          {/* Row 2: Commodity Procurement & DBT Settlement breakdown */}
+          {/* Row 2 */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Commodity-wise procurement table */}
+            {/* Commodity-wise procurement */}
             <Card className="p-5 border-slate-200">
               <h3 className="text-sm font-bold text-slate-900 mb-1">
                 Commodity-Wise Procurement Volume & Value
               </h3>
+
               <p className="text-xs text-slate-500 mb-4">
                 Calculated dynamically from approved weighbridge slips
               </p>
@@ -204,13 +283,20 @@ export const AdminDashboard: React.FC = () => {
               ) : (
                 <div className="divide-y divide-slate-100">
                   {analytics.commodityProcurement.map((comm) => (
-                    <div key={comm.name} className="py-2.5 flex items-center justify-between text-xs">
+                    <div
+                      key={comm.name}
+                      className="py-2.5 flex items-center justify-between text-xs"
+                    >
                       <div>
-                        <span className="font-bold text-slate-900 block">{comm.name}</span>
+                        <span className="font-bold text-slate-900 block">
+                          {comm.name}
+                        </span>
+
                         <span className="text-[11px] text-slate-500 font-mono">
                           {comm.quintals.toLocaleString()} Quintals
                         </span>
                       </div>
+
                       <div className="text-right">
                         <span className="font-mono font-black text-sm text-emerald-800">
                           ₹{comm.valueInr.toLocaleString('en-IN')}
@@ -222,13 +308,17 @@ export const AdminDashboard: React.FC = () => {
               )}
             </Card>
 
-            {/* DBT Payment Status Breakdown */}
+            {/* DBT Payment Status */}
             <Card className="p-5 border-slate-200 flex flex-col justify-between">
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <h3 className="text-sm font-bold text-slate-900">DBT Bank Payout Reconciliations</h3>
+                  <h3 className="text-sm font-bold text-slate-900">
+                    DBT Bank Payout Reconciliations
+                  </h3>
+
                   <CreditCard className="w-4 h-4 text-indigo-600" />
                 </div>
+
                 <p className="text-xs text-slate-500 mb-4">
                   Direct Benefit Transfer settlement status across banks
                 </p>
@@ -237,8 +327,12 @@ export const AdminDashboard: React.FC = () => {
                   <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">
                     Total Payable Amount
                   </span>
+
                   <div className="text-2xl font-black font-mono text-slate-900 mt-0.5">
-                    ₹{analytics.paymentStatusBreakdown.totalAmountInr.toLocaleString('en-IN')}
+                    ₹
+                    {analytics.paymentStatusBreakdown.totalAmountInr.toLocaleString(
+                      'en-IN'
+                    )}
                   </div>
                 </div>
 
@@ -247,6 +341,7 @@ export const AdminDashboard: React.FC = () => {
                     <span className="text-[10px] uppercase font-bold text-emerald-700 block">
                       Credited
                     </span>
+
                     <span className="text-base font-black font-mono text-emerald-800 mt-1 block">
                       {analytics.paymentStatusBreakdown.credited}
                     </span>
@@ -256,6 +351,7 @@ export const AdminDashboard: React.FC = () => {
                     <span className="text-[10px] uppercase font-bold text-amber-700 block">
                       Processing
                     </span>
+
                     <span className="text-base font-black font-mono text-amber-800 mt-1 block">
                       {analytics.paymentStatusBreakdown.processing}
                     </span>
@@ -265,6 +361,7 @@ export const AdminDashboard: React.FC = () => {
                     <span className="text-[10px] uppercase font-bold text-slate-600 block">
                       Pending
                     </span>
+
                     <span className="text-base font-black font-mono text-slate-700 mt-1 block">
                       {analytics.paymentStatusBreakdown.pending}
                     </span>
@@ -278,11 +375,12 @@ export const AdminDashboard: React.FC = () => {
             </Card>
           </div>
 
-          {/* Row 3: Centre Performance Yard Table */}
+          {/* Row 3: Centre Performance */}
           <Card className="p-5 border-slate-200">
             <h3 className="text-sm font-bold text-slate-900 mb-1">
               Procurement Centre Real-Time Performance
             </h3>
+
             <p className="text-xs text-slate-500 mb-4">
               Real-time bookings, tonnage, and queue bottlenecks by Mandi yard
             </p>
@@ -291,30 +389,58 @@ export const AdminDashboard: React.FC = () => {
               <table className="w-full text-left text-xs">
                 <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase font-semibold">
                   <tr>
-                    <th className="py-2.5 px-3">Centre Name</th>
-                    <th className="py-2.5 px-3">Today's Bookings</th>
-                    <th className="py-2.5 px-3">Active Queue</th>
-                    <th className="py-2.5 px-3">Procured (Qtl)</th>
-                    <th className="py-2.5 px-3 text-right">Status</th>
+                    <th className="py-2.5 px-3">
+                      Centre Name
+                    </th>
+
+                    <th className="py-2.5 px-3">
+                      Today's Bookings
+                    </th>
+
+                    <th className="py-2.5 px-3">
+                      Active Queue
+                    </th>
+
+                    <th className="py-2.5 px-3">
+                      Procured (Qtl)
+                    </th>
+
+                    <th className="py-2.5 px-3 text-right">
+                      Status
+                    </th>
                   </tr>
                 </thead>
+
                 <tbody className="divide-y divide-slate-100 font-medium">
                   {analytics.centrePerformance.map((cp) => (
-                    <tr key={cp.centreId} className="hover:bg-slate-50 transition">
-                      <td className="py-3 px-3 font-bold text-slate-900">{cp.centreName}</td>
-                      <td className="py-3 px-3 font-mono">{cp.todayBookings}</td>
+                    <tr
+                      key={cp.centreId}
+                      className="hover:bg-slate-50 transition"
+                    >
+                      <td className="py-3 px-3 font-bold text-slate-900">
+                        {cp.centreName}
+                      </td>
+
+                      <td className="py-3 px-3 font-mono">
+                        {cp.todayBookings}
+                      </td>
+
                       <td className="py-3 px-3">
                         <span
                           className={`font-mono font-bold ${
-                            cp.currentQueue > 10 ? 'text-rose-600' : 'text-slate-700'
+                            cp.currentQueue > 10
+                              ? 'text-rose-600'
+                              : 'text-slate-700'
                           }`}
                         >
                           {cp.currentQueue} vehicles
                         </span>
                       </td>
+
                       <td className="py-3 px-3 font-mono font-bold text-emerald-800">
                         {cp.todayProcuredQuintals} Qtl
                       </td>
+
                       <td className="py-3 px-3 text-right">
                         <span
                           className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
@@ -340,8 +466,14 @@ export const AdminDashboard: React.FC = () => {
         <CentreManagementTab
           centres={centres}
           onAddCentre={handleAddCentre}
+          onUpdateCentre={handleUpdateCentre}
           onToggleStatus={handleToggleCentreStatus}
         />
+      )}
+
+      {/* TAB CONTENT: OPERATORS */}
+      {activeTab === 'operators' && (
+        <OperatorManagementTab centres={centres} />
       )}
 
       {/* TAB CONTENT: COMMODITIES */}
