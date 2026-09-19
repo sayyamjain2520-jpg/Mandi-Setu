@@ -10,6 +10,7 @@ import {
 
 import { AuthProvider, useAuth } from '@/context/AuthContext'
 import { NotificationProvider } from '@/context/NotificationContext'
+import { LanguageProvider } from '@/context/LanguageContext'
 
 import { Header } from '@/components/layout/Header'
 import { ToastBanner } from '@/components/feedback/ToastBanner'
@@ -209,36 +210,38 @@ const MainAppLayout: React.FC = () => {
  */
 export default function App() {
   return (
-    <BrowserRouter>
-      <AuthProvider>
-        <NotificationProvider>
-          <Routes>
-            {/* -------------------------------------------- */}
-            {/* Public login                                 */}
-            {/* -------------------------------------------- */}
-            <Route path="/login" element={<LoginPage />} />
+    <LanguageProvider>
+      <BrowserRouter>
+        <AuthProvider>
+          <NotificationProvider>
+            <Routes>
+              {/* -------------------------------------------- */}
+              {/* Public login                                 */}
+              {/* -------------------------------------------- */}
+              <Route path="/login" element={<LoginPage />} />
 
-            {/* -------------------------------------------- */}
-            {/* Root                                         */}
-            {/* -------------------------------------------- */}
-            <Route path="/" element={<RoleRedirect />} />
+              {/* -------------------------------------------- */}
+              {/* Root                                         */}
+              {/* -------------------------------------------- */}
+              <Route path="/" element={<RoleRedirect />} />
 
-            {/* -------------------------------------------- */}
-            {/* Protected role routes                        */}
-            {/* -------------------------------------------- */}
-            <Route path="/farmer" element={<MainAppLayout />} />
+              {/* -------------------------------------------- */}
+              {/* Protected role routes                        */}
+              {/* -------------------------------------------- */}
+              <Route path="/farmer" element={<MainAppLayout />} />
 
-            <Route path="/operator" element={<MainAppLayout />} />
+              <Route path="/operator" element={<MainAppLayout />} />
 
-            <Route path="/admin" element={<MainAppLayout />} />
+              <Route path="/admin" element={<MainAppLayout />} />
 
-            {/* -------------------------------------------- */}
-            {/* Unknown route                                */}
-            {/* -------------------------------------------- */}
-            <Route path="*" element={<RoleRedirect />} />
-          </Routes>
-        </NotificationProvider>
-      </AuthProvider>
-    </BrowserRouter>
+              {/* -------------------------------------------- */}
+              {/* Unknown route                                */}
+              {/* -------------------------------------------- */}
+              <Route path="*" element={<RoleRedirect />} />
+            </Routes>
+          </NotificationProvider>
+        </AuthProvider>
+      </BrowserRouter>
+    </LanguageProvider>
   )
 }

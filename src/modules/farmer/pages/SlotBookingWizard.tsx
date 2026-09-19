@@ -131,13 +131,13 @@ export const SlotBookingWizard: React.FC<SlotBookingWizardProps> = ({
   const [estimatedQuantity, setEstimatedQuantity] =
     useState<number>(50)
 
-  const [numberOfVehicles, setNumberOfVehicles] = useState<number>(1)
+  const [numberOfVehicles, setNumberOfVehicles] = useState<string>('1')
 
   const [vehicleType, setVehicleType] =
     useState<Booking['vehicleType']>('Tractor Trolley')
 
   const [vehicleNumber, setVehicleNumber] =
-    useState('RJ-20-EA-4122')
+    useState('')
 
   const [notes, setNotes] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -198,7 +198,7 @@ export const SlotBookingWizard: React.FC<SlotBookingWizardProps> = ({
               const smartWait = await api.calculateSmartWaitTime({
                 centreId,
                 farmersAhead: slot.bookedCount,
-                numberOfVehicles,
+                numberOfVehicles: Math.max(1, Math.min(10, Number(numberOfVehicles) || 1)),
               })
 
               return {
@@ -327,7 +327,9 @@ export const SlotBookingWizard: React.FC<SlotBookingWizardProps> = ({
       return
     }
 
-    if (numberOfVehicles < 1 || numberOfVehicles > 10) {
+    const vehicleCount = Number(numberOfVehicles)
+
+    if (!Number.isInteger(vehicleCount) || vehicleCount < 1 || vehicleCount > 10) {
       setError('Number of vehicles must be between 1 and 10.')
       return
     }
@@ -362,7 +364,7 @@ export const SlotBookingWizard: React.FC<SlotBookingWizardProps> = ({
         slotTimeStart: startTime,
         slotTimeEnd: endTime,
         estimatedQuantityQuintals: estimatedQuantity,
-        numberOfVehicles,
+        numberOfVehicles: vehicleCount,
 
         vehicleType,
 
@@ -690,7 +692,7 @@ export const SlotBookingWizard: React.FC<SlotBookingWizardProps> = ({
                 const value = e.target.value
                 setEstimatedQuantity(value === '' ? 0 : Number(value))
               }}
-              placeholder="Enter estimated quantity in quintals"
+              placeholder="Enter quantity"
             />
 
             <p className="text-[11px] text-slate-400 mt-1">
@@ -772,17 +774,40 @@ export const SlotBookingWizard: React.FC<SlotBookingWizardProps> = ({
               min={1}
               max={10}
               value={numberOfVehicles}
-              onChange={(e) =>
-                setNumberOfVehicles(
-                  Math.max(1, Math.min(10, Number(e.target.value) || 1))
-                )
-              }
+              onFocus={() => {
+                if (numberOfVehicles === '1') {
+                  setNumberOfVehicles('')
+                }
+              }}
+              onBlur={() => {
+                if (numberOfVehicles === '') {
+                  setNumberOfVehicles('1')
+                }
+              }}
+              onChange={(e) => {
+                const value = e.target.value
+
+                // Allow the field to be temporarily empty while typing.
+                if (value === '') {
+                  setNumberOfVehicles('')
+                  return
+                }
+
+                // Only allow whole numbers from 1 to 10.
+                if (/^\d+$/.test(value)) {
+                  const num = Number(value)
+
+                  if (num >= 1 && num <= 10) {
+                    setNumberOfVehicles(value)
+                  }
+                }
+              }}
               leftIcon={<Truck className="w-4 h-4" />}
             />
 
             <Input
               label="Vehicle Reg. Number" 
-              placeholder="e.g. RJ-20-EA-4122"
+              placeholder="Enter vehicle number"
               value={vehicleNumber}
               onChange={(e) =>
                 setVehicleNumber(e.target.value)
