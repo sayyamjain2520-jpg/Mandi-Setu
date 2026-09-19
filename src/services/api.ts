@@ -48,6 +48,7 @@ export interface IDataService {
     congestionLevel: 'low' | 'medium' | 'high'
     averageProcessingMinutes: number
     activeProcessingCapacity: number
+    learningAdjustmentMinutes: number
   }>
   checkInAtGate(tokenOrBookingNumber: string): Promise<{ success: boolean; message: string; entry?: QueueEntry }>
   callNextInQueue(centreId: string): Promise<{ success: boolean; entry?: QueueEntry; message: string }>
@@ -131,6 +132,15 @@ class DataService implements IDataService {
         event: '*',
         schema: 'public',
         table: 'time_slots',
+      },
+      () => callback()
+    )
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'ai_prediction_cycles',
       },
       () => callback()
     )
@@ -667,7 +677,7 @@ class DataService implements IDataService {
         smartWait.estimatedWaitMinutes
 
       // 10. Create queue entry
-      const { error: queueInsertError } = await client
+      const { data: queueEntry, error: queueInsertError } = await client
         .from('queue_entries')
         .insert({
           booking_id: booking.id,
@@ -677,6 +687,8 @@ class DataService implements IDataService {
           priority_order: priorityOrder,
           estimated_wait_minutes: estimatedWaitMinutes,
         })
+        .select('id')
+        .single()
 
       if (queueInsertError) {
 
@@ -703,6 +715,48 @@ class DataService implements IDataService {
         throw new Error(
           `Failed to create queue entry: ${queueInsertError.message}`
         )
+      }
+
+      // ----------------------------------------------------
+      // LOOPING: SAVE AI PREDICTION
+      // ----------------------------------------------------
+      // Store the exact inputs and output produced by the Smart
+      // Arrival Engine. The record is completed later when the
+      // farmer is actually called and real wait time is known.
+      if (queueEntry) {
+        const { error: predictionInsertError } = await client
+          .from('ai_prediction_cycles')
+          .insert({
+            queue_entry_id: queueEntry.id,
+            booking_id: booking.id,
+            centre_id: booking.centre_id,
+            farmers_ahead: queueCount || 0,
+            number_of_vehicles:
+              Number(booking.number_of_vehicles) || 1,
+            average_processing_minutes:
+              smartWait.averageProcessingMinutes,
+            active_processing_capacity:
+              smartWait.activeProcessingCapacity,
+            congestion_level:
+              smartWait.congestionLevel,
+            predicted_wait_minutes:
+              estimatedWaitMinutes,
+            learning_adjustment_minutes:
+              smartWait.learningAdjustmentMinutes,
+            model_version: 'smart-arrival-loop-v1',
+            prediction_status: 'pending',
+            learning_note:
+              smartWait.learningAdjustmentMinutes === 0
+                ? 'Initial prediction based on live queue and historical processing data.'
+                : `Prediction adjusted by ${smartWait.learningAdjustmentMinutes > 0 ? '+' : ''}${smartWait.learningAdjustmentMinutes} minutes using recent prediction error feedback.`,
+          })
+
+        if (predictionInsertError) {
+          console.error(
+            'AI Loop: failed to save prediction:',
+            predictionInsertError
+          )
+        }
       }
 
       // 11. Notify farmer
@@ -869,6 +923,7 @@ class DataService implements IDataService {
     congestionLevel: 'low' | 'medium' | 'high'
     averageProcessingMinutes: number
     activeProcessingCapacity: number
+    learningAdjustmentMinutes: number
   }> {
     const client = supabase
 
@@ -885,6 +940,7 @@ class DataService implements IDataService {
     // Conservative fallback while a centre builds real processing history.
     let averageProcessingMinutes = 8
     let activeProcessingCapacity = 1
+    let learningAdjustmentMinutes = 0
 
     if (this.isCloudMode() && client) {
       // Read recent completed queue entries so the estimate learns from
@@ -968,6 +1024,37 @@ class DataService implements IDataService {
           Math.min(activeProcessors || 1, 3)
         )
       }
+
+      // ----------------------------------------------------
+      // LOOPING LEARNING ADJUSTMENT
+      // ----------------------------------------------------
+      // Recent signed prediction error becomes a bounded
+      // correction for the next prediction at this centre.
+      const { data: loopSummary, error: loopError } = await client
+        .from('ai_loop_summary')
+        .select('avg_prediction_error_minutes')
+        .eq('centre_id', params.centreId)
+        .maybeSingle()
+
+      if (loopError) {
+        console.warn(
+          'AI Loop: unable to load learning adjustment:',
+          loopError.message
+        )
+      } else if (
+        loopSummary?.avg_prediction_error_minutes !== null &&
+        loopSummary?.avg_prediction_error_minutes !== undefined
+      ) {
+        learningAdjustmentMinutes = Math.max(
+          -15,
+          Math.min(
+            15,
+            Math.round(
+              Number(loopSummary.avg_prediction_error_minutes)
+            )
+          )
+        )
+      }
     }
 
     // A multi-vehicle booking normally takes more handling time than a
@@ -979,7 +1066,7 @@ class DataService implements IDataService {
           ? 1.35
           : 1.7
 
-    const estimatedWaitMinutes = Math.max(
+    const baseEstimatedWaitMinutes = Math.max(
       0,
       Math.ceil(
         (safeFarmersAhead *
@@ -987,6 +1074,11 @@ class DataService implements IDataService {
           vehicleFactor) /
           activeProcessingCapacity
       )
+    )
+
+    const estimatedWaitMinutes = Math.max(
+      0,
+      baseEstimatedWaitMinutes + learningAdjustmentMinutes
     )
 
     let congestionLevel: 'low' | 'medium' | 'high' = 'low'
@@ -1005,6 +1097,7 @@ class DataService implements IDataService {
       congestionLevel,
       averageProcessingMinutes,
       activeProcessingCapacity,
+      learningAdjustmentMinutes,
     }
   }
 
@@ -1207,11 +1300,13 @@ class DataService implements IDataService {
       }
 
       const target = eligible[0]
+      const calledAt = new Date().toISOString()
+
      const { error: queueUpdateError } = await client
   .from('queue_entries')
   .update({
     current_stage: 'called_to_gate',
-    called_time: new Date().toISOString(),
+    called_time: calledAt,
     estimated_wait_minutes: 0,
     updated_at: new Date().toISOString(),
   })
@@ -1227,6 +1322,81 @@ if (queueUpdateError) {
     `Failed to call farmer to gate: ${queueUpdateError.message}`
   )
 }
+
+      // ----------------------------------------------------
+      // LOOPING: OBSERVE ACTUAL WAIT + LEARN
+      // ----------------------------------------------------
+      // Actual wait is measured from gate arrival to the time
+      // the operator calls the farmer forward.
+      if (target.arrival_time) {
+        const arrivalMs = new Date(target.arrival_time).getTime()
+        const calledMs = new Date(calledAt).getTime()
+
+        if (
+          Number.isFinite(arrivalMs) &&
+          Number.isFinite(calledMs) &&
+          calledMs >= arrivalMs
+        ) {
+          const actualWaitMinutes = Math.round(
+            (calledMs - arrivalMs) / 60000
+          )
+
+          const {
+            data: predictionCycle,
+            error: predictionFetchError,
+          } = await client
+            .from('ai_prediction_cycles')
+            .select('id, predicted_wait_minutes')
+            .eq('queue_entry_id', target.id)
+            .maybeSingle()
+
+          if (predictionFetchError) {
+            console.error(
+              'AI Loop: failed to load prediction:',
+              predictionFetchError
+            )
+          }
+
+          if (predictionCycle) {
+            const predictionError =
+              actualWaitMinutes -
+              Number(predictionCycle.predicted_wait_minutes)
+
+            const absoluteError = Math.abs(predictionError)
+
+            const { error: learningUpdateError } = await client
+              .from('ai_prediction_cycles')
+              .update({
+                actual_wait_minutes: actualWaitMinutes,
+                observed_at: calledAt,
+                prediction_error_minutes: predictionError,
+                absolute_error_minutes: absoluteError,
+                prediction_status: 'completed',
+                next_prediction_minutes: Math.max(
+                  0,
+                  Number(predictionCycle.predicted_wait_minutes) +
+                    predictionError
+                ),
+                updated_at: new Date().toISOString(),
+              })
+              .eq('id', predictionCycle.id)
+
+            if (learningUpdateError) {
+              console.error(
+                'AI Loop: failed to update learning result:',
+                learningUpdateError
+              )
+            } else {
+              console.log('🔄 AI LOOP COMPLETED:', {
+                predictedWait:
+                  predictionCycle.predicted_wait_minutes,
+                actualWait: actualWaitMinutes,
+                error: predictionError,
+              })
+            }
+          }
+        }
+      }
 
       const { error: bookingUpdateError } = await client
   .from('bookings')
@@ -1745,20 +1915,84 @@ await client
     return localStore.addCentre(centre)
   }
 
-  public async updateCentre(id: string, updates: Partial<ProcurementCentre>): Promise<void> {
+  public async updateCentre(
+    id: string,
+    updates: Partial<ProcurementCentre>
+  ): Promise<void> {
     const client = supabase
+
     if (this.isCloudMode() && client) {
-      await client
+      const payload: Record<string, unknown> = {
+        updated_at: new Date().toISOString(),
+      }
+
+      if (updates.code !== undefined) {
+        payload.code = updates.code
+      }
+
+      if (updates.name !== undefined) {
+        payload.name = updates.name
+      }
+
+      if (updates.state !== undefined) {
+        payload.state = updates.state
+      }
+
+      if (updates.district !== undefined) {
+        payload.district = updates.district
+      }
+
+      if (updates.address !== undefined) {
+        payload.address = updates.address
+      }
+
+      if (updates.latitude !== undefined) {
+        payload.latitude = updates.latitude
+      }
+
+      if (updates.longitude !== undefined) {
+        payload.longitude = updates.longitude
+      }
+
+      if (updates.contactPhone !== undefined) {
+        payload.contact_phone = updates.contactPhone
+      }
+
+      if (updates.operationalStatus !== undefined) {
+        payload.operational_status = updates.operationalStatus
+      }
+
+      if (updates.dailyCapacityQuintals !== undefined) {
+        payload.daily_capacity_quintals = updates.dailyCapacityQuintals
+      }
+
+      if (updates.operatingHours?.open !== undefined) {
+        payload.open_time = updates.operatingHours.open
+      }
+
+      if (updates.operatingHours?.close !== undefined) {
+        payload.close_time = updates.operatingHours.close
+      }
+
+      const { error } = await client
         .from('procurement_centres')
-        .update({
-          ...(updates.name ? { name: updates.name } : {}),
-          ...(updates.operationalStatus ? { operational_status: updates.operationalStatus } : {}),
-          ...(updates.dailyCapacityQuintals ? { daily_capacity_quintals: updates.dailyCapacityQuintals } : {}),
-          updated_at: new Date().toISOString(),
-        })
+        .update(payload)
         .eq('id', id)
+
+      if (error) {
+        console.error(
+          'Failed to update procurement centre:',
+          error
+        )
+
+        throw new Error(
+          error.message || 'Failed to update procurement centre'
+        )
+      }
+
       return
     }
+
     localStore.updateCentre(id, updates)
   }
 
