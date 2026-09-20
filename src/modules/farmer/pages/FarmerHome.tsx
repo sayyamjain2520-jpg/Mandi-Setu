@@ -108,11 +108,21 @@ export const FarmerHome: React.FC<FarmerHomeProps> = ({
   useEffect(() => {
     loadLiveMandiData()
 
+    // Realtime updates are the primary path. This short polling fallback keeps
+    // the capacity card fresh even if a browser temporarily misses a realtime
+    // event after an operator accepts a booking.
+    const intervalId = window.setInterval(() => {
+      loadLiveMandiData()
+    }, 3000)
+
     const unsubscribe = api.subscribe(() => {
       loadLiveMandiData()
     })
 
-    return () => unsubscribe()
+    return () => {
+      window.clearInterval(intervalId)
+      unsubscribe()
+    }
   }, [loadLiveMandiData])
 
   return (
