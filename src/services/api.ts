@@ -1339,6 +1339,15 @@ class DataService implements IDataService {
    * is no earlier active token. A token explicitly marked `no_show` is an
    * allowed exception and is therefore ignored as a blocker.
    */
+  /** 
+   * FIFO rule for the Call to Gate action.
+   *
+   * Every token can be called, but only in queue order:
+   * T-001 -> T-002 -> T-003 -> ...
+   *
+   * The earlier token does NOT need to be completed before the next token
+   * can be called. It only needs to have already been called.
+   */
   private async assertFifoOrder(
     centreId: string,
     targetQueueId: string
@@ -1363,7 +1372,6 @@ class DataService implements IDataService {
       throw new Error('Queue entry does not belong to this mandi')
     }
 
-    // Settled and No Show entries do not need FIFO protection.
     if (
       target.current_stage === 'settled' ||
       target.current_stage === 'no_show'
@@ -1371,10 +1379,14 @@ class DataService implements IDataService {
       return
     }
 
+    // STRICT SINGLE-TOKEN FIFO FOR THE ENTIRE WORKFLOW:
+    // Only the first non-terminal token may be called to gate or advance
+    // through gate check-in, QC, weighbridge, and unloading.
     const { data: blockers, error: blockerError } = await client
       .from('queue_entries')
       .select('id, token_number, priority_order, current_stage')
       .eq('centre_id', centreId)
+      .neq('id', target.id)
       .lt('priority_order', target.priority_order)
       .not('current_stage', 'in', '(settled,no_show)')
       .order('priority_order', { ascending: true })
@@ -1389,7 +1401,7 @@ class DataService implements IDataService {
     if (blockers && blockers.length > 0) {
       const blocker = blockers[0]
       throw new Error(
-        `FIFO queue rule: Token ${blocker.token_number} must be completed or marked No Show before Token ${target.token_number} can proceed.`
+        `FIFO rule: Token ${blocker.token_number} is still ahead in the queue. Token ${target.token_number} must wait until Token ${blocker.token_number} is completed or marked No Show.`
       )
     }
   }
@@ -1411,10 +1423,10 @@ class DataService implements IDataService {
 
       const target = eligible[0]
 
-      // Do not call a later token while an earlier active token is still in
-      // the queue or processing workflow.
+      // STRICT SINGLE-TOKEN FIFO:
+      // The next token may be called to gate only after every earlier
+      // non-terminal token has completed or been marked No Show.
       await this.assertFifoOrder(centreId, target.id)
-
      const { error: queueUpdateError } = await client
   .from('queue_entries')
   .update({
@@ -1506,8 +1518,12 @@ if (bookingUpdateError) {
         )
       }
 
-      // No Show is an explicit FIFO exception. Waiting is also allowed
-      // because it does not advance the farmer through the workflow.
+      // STRICT SINGLE-TOKEN FIFO:
+      // Call to Gate itself is FIFO. A later token cannot be called until
+      // the earlier token has completed or is marked No Show.
+      //
+      // The same FIFO guard also protects all processing stages after the
+      // call (gate check-in, QC, weighbridge, unloading).
       if (
         stage !== 'waiting' &&
         stage !== 'no_show' &&

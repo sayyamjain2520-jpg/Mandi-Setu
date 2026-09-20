@@ -1,9 +1,6 @@
-import React, { useEffect, useState } from 'react'
+import React, { useState } from 'react'
 import type { Booking, QueueEntry, QueueStage } from '@/types/procurement.types'
-import type { ProcurementCentre } from '@/types/mandi.types'
 import { TokenQRPass } from '@/components/qr/TokenQRPass'
-import { MandiRouteMap } from '@/components/maps/MandiRouteMap'
-import { api } from '@/services/api'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { StatusPill } from '@/components/ui/Badge'
@@ -306,32 +303,6 @@ export const MyTokensView: React.FC<MyTokensViewProps> = ({
   onBookNewSlot,
 }) => {
   const [expandedBookingId, setExpandedBookingId] = useState<string>('')
-  const [centresByBookingId, setCentresByBookingId] = useState<Record<string, ProcurementCentre | undefined>>({})
-
-  useEffect(() => {
-    let active = true
-
-    const loadCentres = async () => {
-      try {
-        const centres = await api.getCentres()
-        if (!active) return
-
-        const next: Record<string, ProcurementCentre | undefined> = {}
-        bookings.forEach((booking) => {
-          next[booking.id] = centres.find((centre) => centre.id === booking.centreId)
-        })
-        setCentresByBookingId(next)
-      } catch (error) {
-        console.error('Failed to load mandi locations:', error)
-      }
-    }
-
-    if (bookings.length > 0) loadCentres()
-
-    return () => {
-      active = false
-    }
-  }, [bookings])
 
   if (bookings.length === 0) {
     return (
@@ -413,7 +384,7 @@ export const MyTokensView: React.FC<MyTokensViewProps> = ({
                   <div className="min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-mono text-base font-black text-slate-900">
-                        {booking.tokenNumber || 'PENDING'}
+                        {booking.tokenNumber}
                       </span>
 
                       <StatusPill
@@ -807,48 +778,6 @@ export const MyTokensView: React.FC<MyTokensViewProps> = ({
                       </div>
                     </div>
                   </div>
-
-                  {/* Real GPS route */}
-                  {(() => {
-                    const centre = centresByBookingId[booking.id]
-                    const hasValidCoordinates =
-                      Number.isFinite(Number(centre?.latitude)) &&
-                      Number.isFinite(Number(centre?.longitude)) &&
-                      Number(centre?.latitude) !== 0 &&
-                      Number(centre?.longitude) !== 0
-
-                    if (!centre || !hasValidCoordinates) {
-                      return (
-                        <div className="bg-white rounded-2xl border border-slate-200 p-4 mb-4">
-                          <div className="flex items-start gap-3">
-                            <div className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center shrink-0">
-                              <MapPin className="w-4 h-4" />
-                            </div>
-                            <div>
-                              <p className="text-[10px] uppercase tracking-wider font-black text-emerald-700">
-                                Live Route
-                              </p>
-                              <p className="text-xs font-bold text-slate-800 mt-1">
-                                Mandi location is not configured yet.
-                              </p>
-                              <p className="text-[10px] text-slate-500 mt-1">
-                                Add the real latitude and longitude for this procurement centre to enable GPS routing.
-                              </p>
-                            </div>
-                          </div>
-                        </div>
-                      )
-                    }
-
-                    return (
-                      <MandiRouteMap
-                        centreName={centre.name}
-                        destinationLat={Number(centre.latitude)}
-                        destinationLon={Number(centre.longitude)}
-                        className="mb-4"
-                      />
-                    )
-                  })()}
 
                   {/* Timeline */}
                   <div className="bg-white rounded-2xl border border-slate-200 p-5">
