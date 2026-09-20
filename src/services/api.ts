@@ -1,5 +1,6 @@
 import { isSupabaseConfigured, supabase } from '@/config/supabase'
 import { localStore } from '@/services/mock/localStore'
+import type { RealtimeChannel } from '@supabase/supabase-js'
 import type {
   Booking,
   QueueEntry,
@@ -75,83 +76,111 @@ export interface IDataService {
 }
 
 class DataService implements IDataService {
+  private realtimeChannel: RealtimeChannel | null = null
+  private realtimeListeners = new Set<() => void>()
+
   public isCloudMode(): boolean {
     return isSupabaseConfigured()
   }
-  
+
   public subscribe(callback: () => void): () => void {
-  const client = supabase
+    const client = supabase
 
-  if (!this.isCloudMode() || !client) {
-    return () => {}
+    if (!this.isCloudMode() || !client) {
+      return () => {}
+    }
+
+    this.realtimeListeners.add(callback)
+
+    // Create and subscribe to exactly one shared channel for the app.
+    // This prevents React StrictMode or multiple screens from trying to
+    // register postgres_changes handlers on an already-subscribed channel.
+    if (!this.realtimeChannel) {
+      const channelName = `mandi_changes_${crypto.randomUUID()}`
+
+      const notifyListeners = () => {
+        for (const listener of this.realtimeListeners) {
+          try {
+            listener()
+          } catch (error) {
+            console.error('Realtime listener failed:', error)
+          }
+        }
+      }
+
+      this.realtimeChannel = client
+        .channel(channelName)
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'queue_entries',
+          },
+          notifyListeners
+        )
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'bookings',
+          },
+          notifyListeners
+        )
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'procurement_records',
+          },
+          notifyListeners
+        )
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'notifications',
+          },
+          notifyListeners
+        )
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'time_slots',
+          },
+          notifyListeners
+        )
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'commodities',
+          },
+          notifyListeners
+        )
+
+      this.realtimeChannel.subscribe((status) => {
+        console.log('Mandi Realtime:', status)
+      })
+    }
+
+    return () => {
+      this.realtimeListeners.delete(callback)
+
+      if (this.realtimeListeners.size === 0 && this.realtimeChannel) {
+        const channelToRemove = this.realtimeChannel
+        this.realtimeChannel = null
+        void client.removeChannel(channelToRemove)
+      }
+    }
   }
-  const channelName = `mandi_changes_${Date.now()}`
 
-  const channel = client
-    .channel(channelName)
-    .on(
-      'postgres_changes',
-      {
-        event: '*',
-        schema: 'public',
-        table: 'queue_entries',
-      },
-      () => callback()
-    )
-    .on(
-      'postgres_changes',
-      {
-        event: '*',
-        schema: 'public',
-        table: 'bookings',
-      },
-      () => callback()
-    )
-    .on(
-      'postgres_changes',
-      {
-        event: '*',
-        schema: 'public',
-        table: 'procurement_records',
-      },
-      () => callback()
-    )
-    .on(
-      'postgres_changes',
-      {
-        event: '*',
-        schema: 'public',
-        table: 'notifications',
-      },
-      () => callback()
-    )
-    .on(
-      'postgres_changes',
-      {
-        event: '*',
-        schema: 'public',
-        table: 'time_slots',
-      },
-      () => callback()
-    )
-    .on(
-      'postgres_changes',
-      {
-        event: '*',
-        schema: 'public',
-        table: 'commodities',
-      },
-      () => callback()
-    )
-
-  channel.subscribe((status) => {
-    console.log('Mandi Realtime:', status)
-  })
-
-  return () => {
-    client.removeChannel(channel)
-  }
-}
   public async getCentres(): Promise<ProcurementCentre[]> {
     const client = supabase
     if (this.isCloudMode() && client) {
@@ -1102,39 +1131,176 @@ class DataService implements IDataService {
 }
   public async checkInAtGate(tokenOrBookingNumber: string): Promise<{ success: boolean; message: string; entry?: QueueEntry }> {
     const client = supabase
+
     if (this.isCloudMode() && client) {
       const q = tokenOrBookingNumber.trim().toUpperCase()
-      const { data: booking } = await client
+
+      const { data: booking, error: bookingError } = await client
         .from('bookings')
         .select('*, profiles:profiles!bookings_farmer_id_fkey(full_name, phone_number)')
         .or(`booking_number.eq.${q},token_number.eq.${q}`)
         .maybeSingle()
 
-      if (!booking) {
-        return { success: false, message: 'Invalid or expired Token / Booking Number' }
+      if (bookingError) {
+        console.error('Gate verification booking lookup failed:', bookingError)
+        return {
+          success: false,
+          message: 'Unable to verify this token right now. Please try again.',
+        }
       }
 
-      await client
-        .from('bookings')
-        .update({ status: 'arrived', updated_at: new Date().toISOString() })
-        .eq('id', booking.id)
+      if (!booking) {
+        return {
+          success: false,
+          message: 'Invalid or expired Token / Booking Number',
+        }
+      }
 
-      const { data: qe } = await client
+      // SECURITY / WORKFLOW GATE:
+      // A booking request is not a valid gate pass until an operator
+      // accepts it. Pending/rejected/cancelled bookings cannot enter the yard.
+      if (booking.status !== 'confirmed') {
+        const statusMessage =
+          booking.status === 'pending'
+            ? 'Booking request is still pending operator approval. QR gate check-in is not available yet.'
+            : booking.status === 'rejected'
+              ? 'This booking was rejected and cannot be used for gate check-in.'
+              : booking.status === 'cancelled'
+                ? 'This booking was cancelled and cannot be used for gate check-in.'
+                : `This booking is not eligible for gate check-in because its status is "${booking.status}".`
+
+        return {
+          success: false,
+          message: statusMessage,
+        }
+      }
+
+      // A valid accepted booking must have both a token and server-issued QR
+      // payload before gate verification is allowed.
+      if (!booking.token_number || !booking.qr_code_data) {
+        return {
+          success: false,
+          message: 'Digital pass is not active yet. Please wait for operator acceptance.',
+        }
+      }
+
+      const { data: existingQueue, error: queueLookupError } = await client
+        .from('queue_entries')
+        .select('id, current_stage')
+        .eq('booking_id', booking.id)
+        .maybeSingle()
+
+      if (queueLookupError) {
+        console.error('Gate verification queue lookup failed:', queueLookupError)
+        return {
+          success: false,
+          message: 'Unable to verify queue status right now. Please try again.',
+        }
+      }
+
+      if (!existingQueue) {
+        return {
+          success: false,
+          message: 'No active queue entry exists for this accepted booking yet.',
+        }
+      }
+
+      // QR scanning is the physical gate action.
+      // A token can be scanned while waiting OR after the operator calls it.
+      // FIFO below decides whether that scan is allowed.
+      if (
+        existingQueue.current_stage !== 'waiting' &&
+        existingQueue.current_stage !== 'called_to_gate'
+      ) {
+        return {
+          success: false,
+          message: `Gate check-in is not available because this token is already at "${existingQueue.current_stage}".`,
+        }
+      }
+
+      const { data: currentPriority, error: priorityError } = await client
+        .from('queue_entries')
+        .select('priority_order')
+        .eq('id', existingQueue.id)
+        .single()
+
+      if (priorityError || !currentPriority) {
+        throw new Error(
+          priorityError?.message || 'Unable to verify queue priority.'
+        )
+      }
+
+      const { data: earlierActive, error: earlierActiveError } = await client
+        .from('queue_entries')
+        .select('token_number, priority_order, current_stage')
+        .eq('centre_id', booking.centre_id)
+        .lt('priority_order', currentPriority.priority_order)
+        .not('current_stage', 'in', '(settled,no_show)')
+        .order('priority_order', { ascending: true })
+        .limit(1)
+
+      if (earlierActiveError) {
+        throw new Error(
+          `Unable to verify FIFO gate order: ${earlierActiveError.message}`
+        )
+      }
+
+      if (earlierActive && earlierActive.length > 0) {
+        return {
+          success: false,
+          message: `FIFO gate rule: Token ${earlierActive[0].token_number} must be completed or marked No Show before Token ${booking.token_number} can enter the gate.`,
+        }
+      }
+
+      const now = new Date().toISOString()
+
+      const { error: bookingUpdateError } = await client
+        .from('bookings')
+        .update({
+          status: 'arrived',
+          updated_at: now,
+        })
+        .eq('id', booking.id)
+        .in('status', ['confirmed', 'called'])
+
+      if (bookingUpdateError) {
+        throw new Error(
+          `Failed to update booking gate status: ${bookingUpdateError.message}`
+        )
+      }
+
+      const { data: qe, error: queueUpdateError } = await client
         .from('queue_entries')
         .update({
           current_stage: 'gate_passed',
-          arrival_time: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
+          arrival_time: now,
+          updated_at: now,
         })
         .eq('booking_id', booking.id)
+        .in('current_stage', ['waiting', 'called_to_gate'])
         .select()
         .single()
 
-      // Notification
+      if (queueUpdateError || !qe) {
+        // Keep the booking consistent if the queue transition was rejected.
+        await client
+          .from('bookings')
+          .update({
+            status: 'confirmed',
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', booking.id)
+          .eq('status', 'arrived')
+
+        throw new Error(
+          queueUpdateError?.message || 'Failed to update queue gate status'
+        )
+      }
+
       await client.from('notifications').insert({
         user_id: booking.farmer_id,
         title: 'Gate Check-In Verified',
-        message: `Vehicle ${booking.vehicle_number} checked in. Token ${booking.token_number} is active in queue.`,
+        message: `Vehicle ${booking.vehicle_number} checked in. Token ${booking.token_number} is now active in the procurement workflow.`,
         type: 'gate_entry',
         read: false,
         sms_sent: true,
@@ -1142,26 +1308,24 @@ class DataService implements IDataService {
 
       return {
         success: true,
-        message: `Token ${booking.token_number} successfully checked in at gate!`,
-        entry: qe
-          ? {
-              id: qe.id,
-              bookingId: booking.id,
-              bookingNumber: booking.booking_number,
-              centreId: booking.centre_id,
-              tokenNumber: booking.token_number,
-              farmerName: booking.profiles?.full_name || 'Farmer',
-              farmerPhone: booking.profiles?.phone_number || '',
-              commodityName: 'Agri Crop',
-              numberOfVehicles: Number(booking.number_of_vehicles),
-              vehicleNumber: booking.vehicle_number,
-              currentStage: 'gate_passed',
-              priorityOrder: qe.priority_order,
-              arrivalTime: qe.arrival_time,
-              estimatedWaitMinutes: qe.estimated_wait_minutes,
-              updatedAt: qe.updated_at,
-            }
-          : undefined,
+        message: `Token ${booking.token_number} successfully checked in at gate via QR scan!`,
+        entry: {
+          id: qe.id,
+          bookingId: booking.id,
+          bookingNumber: booking.booking_number,
+          centreId: booking.centre_id,
+          tokenNumber: booking.token_number,
+          farmerName: booking.profiles?.full_name || 'Farmer',
+          farmerPhone: booking.profiles?.phone_number || '',
+          commodityName: 'Agri Crop',
+          numberOfVehicles: Number(booking.number_of_vehicles) || 1,
+          vehicleNumber: booking.vehicle_number,
+          currentStage: 'gate_passed',
+          priorityOrder: qe.priority_order,
+          arrivalTime: qe.arrival_time,
+          estimatedWaitMinutes: qe.estimated_wait_minutes,
+          updatedAt: qe.updated_at,
+        },
       }
     }
 
@@ -1246,6 +1410,11 @@ class DataService implements IDataService {
       }
 
       const target = eligible[0]
+
+      // Do not call a later token while an earlier active token is still in
+      // the queue or processing workflow.
+      await this.assertFifoOrder(centreId, target.id)
+
      const { error: queueUpdateError } = await client
   .from('queue_entries')
   .update({
@@ -1399,6 +1568,30 @@ if (bookingUpdateError) {
       const ratePerQuintal = Number(booking.commodities?.msp_price_per_quintal) || 2275.0
       const netWeightKg = Math.max(0, params.grossWeightKg - params.tareWeightKg)
       const maxMoisture = Number(booking.commodities?.max_moisture_percentage) || 12.0
+
+      // Safety check: a huge difference between the farmer's booking estimate
+      // and the physical weighbridge result requires re-verification.
+      // This is enforced server-side so a receipt/payment cannot be created
+      // by bypassing the UI.
+      const estimatedBookingQuintals = Number(
+        booking.estimated_quantity_quintals || 0
+      )
+      if (estimatedBookingQuintals > 0) {
+        const rawQuantityQuintals = Number((netWeightKg / 100).toFixed(2))
+        const varianceRatio =
+          Math.abs(rawQuantityQuintals - estimatedBookingQuintals) /
+          estimatedBookingQuintals
+
+        if (rawQuantityQuintals > 0 && varianceRatio >= 0.25) {
+          throw new Error(
+            `Weighment blocked: booking estimate ${estimatedBookingQuintals.toFixed(
+              2
+            )} Qtl differs too much from the actual net weight ${rawQuantityQuintals.toFixed(
+              2
+            )} Qtl. Please re-check Gross and Tare readings before issuing the receipt.`
+          )
+        }
+      }
       let deductionKg = 0
       if (params.moisturePercentage > maxMoisture) {
         deductionKg = Math.round((netWeightKg * (params.moisturePercentage - maxMoisture)) / 100)

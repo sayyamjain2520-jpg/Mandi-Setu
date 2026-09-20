@@ -1,5 +1,7 @@
-import React, { useMemo } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from '@/context/AuthContext'
+import { api } from '@/services/api'
+import type { ProcurementCentre } from '@/types/mandi.types'
 import type { Booking, QueueEntry, Commodity } from '@/types/procurement.types'
 import { Button } from '@/components/ui/Button'
 import { StatusPill } from '@/components/ui/Badge'
@@ -21,6 +23,9 @@ import {
   WalletCards,
   Wheat,
   Zap,
+  Activity,
+  CircleCheck,
+  CircleAlert,
 } from 'lucide-react'
 
 interface FarmerHomeProps {
@@ -51,6 +56,65 @@ export const FarmerHome: React.FC<FarmerHomeProps> = ({
     [commodities],
   )
 
+  const [liveMandiData, setLiveMandiData] = useState<
+    Array<
+      ProcurementCentre & {
+        bookedToday: number
+        capacityToday: number
+        availableToday: number
+      }
+    >
+  >([])
+  const [isLoadingMandiData, setIsLoadingMandiData] = useState(true)
+
+  const loadLiveMandiData = useCallback(async () => {
+    try {
+      const centres = await api.getCentres()
+      const today = new Date().toISOString().split('T')[0]
+
+      const rows = await Promise.all(
+        centres
+          .filter((centre) => centre.operationalStatus === 'active')
+          .slice(0, 6)
+          .map(async (centre) => {
+            const slots = await api.getSlots(centre.id, today)
+
+            const capacityToday = slots.reduce(
+              (sum, slot) => sum + Number(slot.maxCapacityFarmers || 0),
+              0,
+            )
+            const bookedToday = slots.reduce(
+              (sum, slot) => sum + Number(slot.bookedCount || 0),
+              0,
+            )
+
+            return {
+              ...centre,
+              bookedToday,
+              capacityToday,
+              availableToday: Math.max(capacityToday - bookedToday, 0),
+            }
+          }),
+      )
+
+      setLiveMandiData(rows)
+    } catch (error) {
+      console.error('Failed to load live mandi capacity:', error)
+    } finally {
+      setIsLoadingMandiData(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    loadLiveMandiData()
+
+    const unsubscribe = api.subscribe(() => {
+      loadLiveMandiData()
+    })
+
+    return () => unsubscribe()
+  }, [loadLiveMandiData])
+
   return (
     <div className="min-h-full space-y-5 bg-gradient-to-b from-slate-50 via-white to-white pb-28">
       <section className="relative overflow-hidden rounded-[30px] border border-emerald-950/10 bg-[radial-gradient(circle_at_85%_15%,rgba(52,211,153,0.18),transparent_25%),linear-gradient(135deg,#052e2a_0%,#075846_48%,#0b8068_100%)] px-5 py-5 text-white shadow-[0_24px_70px_-32px_rgba(4,120,87,0.6)] sm:px-7 sm:py-7">
@@ -72,9 +136,9 @@ export const FarmerHome: React.FC<FarmerHomeProps> = ({
 
           <div className="mt-5 grid gap-5 lg:grid-cols-[1.45fr_0.75fr] lg:items-end">
             <div>
-              <h2 className="mt-4 text-3xl font-black leading-tight tracking-tight text-white sm:text-5xl">
-                Namaste, {user?.fullName || 'Kisan Mitra'} 
-              </h2>
+              <h1 className="mt-4 text-3xl font-black leading-tight tracking-tight text-white sm:text-5xl">
+                Namaste, {user?.fullName || 'Kisan Mitra'} 👋
+              </h1>
 
               <p className="mt-3 max-w-2xl text-xs leading-6 text-emerald-50/80 sm:text-sm">
                 Book ahead, follow your queue live, check today&apos;s MSP reference rates,
@@ -107,6 +171,121 @@ export const FarmerHome: React.FC<FarmerHomeProps> = ({
       </section>
 
       <MSPTicker commodities={commodities} />
+
+      {/* Live Mandi Capacity */}
+      <section className="rounded-[26px] border border-slate-200 bg-white p-4 shadow-[0_18px_45px_-34px_rgba(15,23,42,0.35)] sm:p-5">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-100 text-emerald-800">
+                <Activity className="h-4 w-4" />
+              </span>
+              <p className="text-[10px] font-black uppercase tracking-[0.16em] text-emerald-700">
+                Live mandi capacity
+              </p>
+            </div>
+            <h2 className="mt-2 text-lg font-black tracking-tight text-slate-950">
+              Today&apos;s availability
+            </h2>
+            <p className="mt-1 text-xs text-slate-500">
+              Availability is calculated from current slot bookings in Mandi Setu.
+            </p>
+          </div>
+
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-[10px] font-bold text-emerald-800">
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
+            Live
+          </span>
+        </div>
+
+        {isLoadingMandiData ? (
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            {[1, 2].map((item) => (
+              <div key={item} className="h-28 animate-pulse rounded-2xl bg-slate-100" />
+            ))}
+          </div>
+        ) : liveMandiData.length === 0 ? (
+          <div className="mt-4 rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-center">
+            <p className="text-sm font-bold text-slate-700">
+              No active procurement centres available.
+            </p>
+            <p className="mt-1 text-xs text-slate-500">
+              Please check again when a Mandi centre is open.
+            </p>
+          </div>
+        ) : (
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            {liveMandiData.map((centre) => {
+              const utilisation =
+                centre.capacityToday > 0
+                  ? Math.min((centre.bookedToday / centre.capacityToday) * 100, 100)
+                  : 0
+
+              const isNearlyFull =
+                centre.capacityToday > 0 &&
+                centre.availableToday <= Math.max(3, Math.ceil(centre.capacityToday * 0.1))
+
+              return (
+                <button
+                  key={centre.id}
+                  type="button"
+                  onClick={() => onNavigate('mandis')}
+                  className="group rounded-2xl border border-slate-200 bg-gradient-to-br from-white to-slate-50 p-4 text-left transition-all hover:-translate-y-0.5 hover:border-emerald-200 hover:shadow-[0_18px_35px_-28px_rgba(5,150,105,0.45)] focus:outline-none focus:ring-2 focus:ring-emerald-400/40"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-black text-slate-950">
+                        {centre.name}
+                      </p>
+                      <p className="mt-1 text-[10px] font-medium text-slate-500">
+                        {centre.district}, {centre.state}
+                      </p>
+                    </div>
+
+                    <span
+                      className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-1 text-[9px] font-black ${
+                        isNearlyFull ? 'bg-amber-50 text-amber-700' : 'bg-emerald-50 text-emerald-700'
+                      }`}
+                    >
+                      {isNearlyFull ? (
+                        <CircleAlert className="h-3 w-3" />
+                      ) : (
+                        <CircleCheck className="h-3 w-3" />
+                      )}
+                      {isNearlyFull ? 'Limited' : 'Available'}
+                    </span>
+                  </div>
+
+                  <div className="mt-4 flex items-end justify-between gap-4">
+                    <div>
+                      <p className="text-xl font-black text-slate-950">
+                        {centre.availableToday}
+                      </p>
+                      <p className="text-[10px] font-semibold text-slate-400">
+                        slots available
+                      </p>
+                    </div>
+
+                    <div className="text-right">
+                      <p className="text-xs font-black text-slate-700">
+                        {centre.bookedToday} / {centre.capacityToday}
+                      </p>
+                      <p className="text-[10px] text-slate-400">booked today</p>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100">
+                    <div
+                      className={`h-full rounded-full transition-all ${isNearlyFull ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                      style={{ width: `${utilisation}%` }}
+                    />
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+        )}
+      </section>
 
       {activeBooking &&
         activeBooking.status !== 'completed' &&
@@ -200,8 +379,8 @@ export const FarmerHome: React.FC<FarmerHomeProps> = ({
           </div>
 
           <div className="hidden text-right sm:block">
-            <p className="text-[10px] font-semibold text-slate-400"></p>
-            <p className="text-[11px] font-bold text-slate-700"></p>
+            <p className="text-[10px] font-semibold text-slate-400">Built for daily use</p>
+            <p className="text-[11px] font-bold text-slate-700">Simple · clear · fast</p>
           </div>
         </div>
 

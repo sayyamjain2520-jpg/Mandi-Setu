@@ -34,9 +34,9 @@ export const ProcurementEntryModal: React.FC<
   onSubmit,
   isLoading = false,
 }) => {
-  const [grossWeight, setGrossWeight] = useState<number>(8500)
-  const [tareWeight, setTareWeight] = useState<number>(3200)
-  const [moisture, setMoisture] = useState<number>(11.2)
+  const [grossWeight, setGrossWeight] = useState<number | ''>('')
+  const [tareWeight, setTareWeight] = useState<number | ''>('')
+  const [moisture, setMoisture] = useState<number | ''>('')
   const [grade, setGrade] =
     useState<ProcurementRecord['qualityGrade']>('Grade A')
 
@@ -45,6 +45,17 @@ export const ProcurementEntryModal: React.FC<
 
   const [isLoadingCommodity, setIsLoadingCommodity] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Reset physical readings whenever a new booking is opened.
+  // Never carry demo/previous scale values into another farmer's settlement.
+  useEffect(() => {
+    if (!isOpen) return
+
+    setGrossWeight('')
+    setTareWeight('')
+    setMoisture('')
+    setError(null)
+  }, [isOpen, booking.id])
 
   // Load actual commodity pricing/rules from Supabase
   useEffect(() => {
@@ -99,15 +110,19 @@ export const ProcurementEntryModal: React.FC<
   }, [isOpen, booking.commodityId, booking.commodityName])
 
   // Dynamic calculations
+  const grossWeightKgValue = Number(grossWeight || 0)
+  const tareWeightKgValue = Number(tareWeight || 0)
+  const moistureValue = Number(moisture || 0)
+
   const netWeightKg = Math.max(
     0,
-    grossWeight - tareWeight
+    grossWeightKgValue - tareWeightKgValue
   )
 
   const moistureDeductionKg =
-    maxMoisture !== null && moisture > maxMoisture
+    maxMoisture !== null && moistureValue > maxMoisture
       ? Math.round(
-          (netWeightKg * (moisture - maxMoisture)) / 100
+          (netWeightKg * (moistureValue - maxMoisture)) / 100
         )
       : 0
 
@@ -119,6 +134,21 @@ export const ProcurementEntryModal: React.FC<
   const finalQuintals = Number(
     (finalNetKg / 100).toFixed(2)
   )
+
+  const estimatedBookingQuintals = Number(
+    booking.estimatedQuantityQuintals || 0
+  )
+
+  const quantityVarianceRatio =
+    estimatedBookingQuintals > 0
+      ? Math.abs(finalQuintals - estimatedBookingQuintals) /
+        estimatedBookingQuintals
+      : 0
+
+  const hasLargeQuantityVariance =
+    estimatedBookingQuintals > 0 &&
+    finalQuintals > 0 &&
+    quantityVarianceRatio >= 0.25
 
   const estimatedPayable =
     ratePerQuintal !== null
@@ -148,6 +178,20 @@ export const ProcurementEntryModal: React.FC<
       return
     }
 
+    if (grossWeight === '' || grossWeight <= 0) {
+      setError(
+        'Please enter the actual gross weight measured on the weighbridge.'
+      )
+      return
+    }
+
+    if (tareWeight === '' || tareWeight <= 0) {
+      setError(
+        'Please enter the actual tare weight measured for the empty vehicle.'
+      )
+      return
+    }
+
     if (grossWeight <= tareWeight) {
       setError(
         'Gross weight must be greater than tare weight (empty vehicle).'
@@ -155,16 +199,20 @@ export const ProcurementEntryModal: React.FC<
       return
     }
 
-    if (tareWeight <= 0) {
+    if (moisture === '' || moisture < 0) {
       setError(
-        'Please enter a valid tare weight.'
+        'Please enter the actual moisture percentage.'
       )
       return
     }
 
-    if (moisture < 0) {
+    if (hasLargeQuantityVariance) {
       setError(
-        'Please enter a valid moisture percentage.'
+        `WEIGHMENT BLOCKED: booking estimate ${estimatedBookingQuintals.toFixed(
+          2
+        )} Qtl vs actual accepted ${finalQuintals.toFixed(
+          2
+        )} Qtl. The difference is too high. Re-check Gross Weight and Tare Weight before issuing the receipt.`
       )
       return
     }
@@ -172,9 +220,9 @@ export const ProcurementEntryModal: React.FC<
     try {
       await onSubmit({
         bookingId: booking.id,
-        grossWeightKg: grossWeight,
-        tareWeightKg: tareWeight,
-        moisturePercentage: moisture,
+        grossWeightKg: Number(grossWeight),
+        tareWeightKg: Number(tareWeight),
+        moisturePercentage: Number(moisture),
         qualityGrade: grade,
       })
 
@@ -313,6 +361,67 @@ export const ProcurementEntryModal: React.FC<
           />
         </div>
 
+        {/* Booking estimate vs actual weighment */}
+        <div className="rounded-2xl border border-slate-200 bg-white p-3.5">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                Booking estimate
+              </p>
+              <p className="mt-1 font-mono text-base font-black text-slate-900">
+                {estimatedBookingQuintals.toFixed(2)} Qtl
+              </p>
+            </div>
+
+            <div className="text-right">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                Actual accepted
+              </p>
+              <p className="mt-1 font-mono text-base font-black text-emerald-700">
+                {Number(
+                  ((netWeightKg - moistureDeductionKg) / 100).toFixed(2)
+                ).toFixed(2)}{' '}
+                Qtl
+              </p>
+            </div>
+          </div>
+
+          <p className="mt-2 text-[11px] leading-5 text-slate-500">
+            Final payment is calculated from the actual weighbridge reading
+            and applicable moisture deduction, not from the booking estimate.
+            Net accepted weight: {Math.max(
+              0,
+              netWeightKg - moistureDeductionKg
+            ).toLocaleString()} kg.
+          </p>
+        </div>
+
+        {hasLargeQuantityVariance && (
+          <div className="rounded-2xl border border-rose-200 bg-rose-50 p-3.5">
+            <div className="flex items-start gap-3">
+              <div className="mt-0.5 rounded-lg bg-rose-100 px-2 py-1 text-rose-700">
+                🚫
+              </div>
+
+              <div className="flex-1">
+                <p className="text-xs font-black text-rose-900">
+                  Weighment blocked
+                </p>
+
+                <p className="mt-1 text-[11px] leading-5 text-rose-800">
+                  Booking estimate: <b>{estimatedBookingQuintals.toFixed(2)} Qtl</b>
+                  {' '}• Actual accepted: <b>{finalQuintals.toFixed(2)} Qtl</b>.
+                </p>
+
+                <p className="mt-2 text-[11px] leading-5 font-semibold text-rose-800">
+                  The quantity difference is too high to issue a procurement receipt.
+                  Re-check the gross and tare readings and enter the actual weighbridge values.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Dynamic Calculation Summary Card */}
         <div className="p-4 bg-slate-900 text-white rounded-2xl space-y-2.5 text-xs">
           <div className="flex items-center justify-between border-b border-slate-800 pb-2">
@@ -329,7 +438,7 @@ export const ProcurementEntryModal: React.FC<
             <div className="flex items-center justify-between text-amber-300 border-b border-slate-800 pb-2">
               <span>
                 Moisture Excess Deduction (
-                {moisture}% &gt;{' '}
+                {moistureValue.toFixed(1)}% &gt;{' '}
                 {maxMoisture?.toFixed(1)}%):
               </span>
 
@@ -358,7 +467,10 @@ export const ProcurementEntryModal: React.FC<
             </span>
 
             <span className="font-mono font-black text-emerald-400 text-sm">
-              {finalQuintals} Quintals
+              {Number(
+                ((netWeightKg - moistureDeductionKg) / 100).toFixed(2)
+              )}{' '}
+              Quintals
             </span>
           </div>
 
@@ -401,7 +513,8 @@ export const ProcurementEntryModal: React.FC<
             disabled={
               isLoadingCommodity ||
               ratePerQuintal === null ||
-              maxMoisture === null
+              maxMoisture === null ||
+              hasLargeQuantityVariance
             }
             leftIcon={
               <CheckCircle2 className="w-4 h-4" />

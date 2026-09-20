@@ -413,7 +413,7 @@ export const MyTokensView: React.FC<MyTokensViewProps> = ({
                   <div className="min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-mono text-base font-black text-slate-900">
-                        {booking.tokenNumber}
+                        {booking.tokenNumber || 'PENDING'}
                       </span>
 
                       <StatusPill
@@ -984,12 +984,34 @@ export const MyTokensView: React.FC<MyTokensViewProps> = ({
                     </div>
                   )}
 
-                  {/* QR pass */}
+                  {/* Digital QR pass — available only after operator acceptance */}
                   <div className="mt-4">
-                    <TokenQRPass
-                      booking={booking}
-                      queueEntry={queueEntry}
-                    />
+                    {booking.status === 'confirmed' &&
+                    booking.tokenNumber &&
+                    booking.qrCodeData ? (
+                      <TokenQRPass
+                        booking={booking}
+                        queueEntry={queueEntry}
+                      />
+                    ) : (
+                      <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                        <div className="flex items-start gap-3">
+                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white text-amber-700 shadow-sm">
+                            <QrCode className="h-5 w-5" />
+                          </div>
+
+                          <div>
+                            <p className="text-sm font-black text-amber-900">
+                              Digital QR pass is not active yet
+                            </p>
+                            <p className="mt-1 text-xs leading-5 text-amber-800/80">
+                              Your booking request must be accepted by the Mandi operator first.
+                              Once accepted, Mandi Setu will generate your token and QR pass.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}

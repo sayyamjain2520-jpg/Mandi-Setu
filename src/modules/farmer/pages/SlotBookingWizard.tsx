@@ -129,7 +129,7 @@ export const SlotBookingWizard: React.FC<SlotBookingWizardProps> = ({
 
   // Estimated quantity in quintals
   const [estimatedQuantity, setEstimatedQuantity] =
-    useState<number>(50)
+    useState<number>(1)
 
   const [numberOfVehicles, setNumberOfVehicles] = useState<string>('1')
 
@@ -677,22 +677,42 @@ export const SlotBookingWizard: React.FC<SlotBookingWizardProps> = ({
                 5. Estimated Quantity (Quintals)
               </label>
 
-              <span className="font-mono font-bold text-sm text-emerald-800">
+              <span
+                key={`quantity-display-${estimatedQuantity}`}
+                className="font-mono font-bold text-sm text-emerald-800"
+              >
                 {estimatedQuantity} Qtl
               </span>
 
             </div>
 
-            <Input
+            <input
               type="number"
               min="0.01"
               step="any"
-              value={estimatedQuantity || ''}
+              inputMode="decimal"
+              value={estimatedQuantity}
               onChange={(e) => {
-                const value = e.target.value
-                setEstimatedQuantity(value === '' ? 0 : Number(value))
+                const raw = e.target.value
+
+                if (raw === '') {
+                  setEstimatedQuantity(0)
+                  return
+                }
+
+                const next = Number(raw)
+
+                if (Number.isFinite(next) && next >= 0 && next <= 100000) {
+                  setEstimatedQuantity(next)
+                }
+              }}
+              onBlur={() => {
+                if (!Number.isFinite(estimatedQuantity) || estimatedQuantity <= 0) {
+                  setEstimatedQuantity(1)
+                }
               }}
               placeholder="Enter quantity"
+              className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm font-medium text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
             />
 
             <p className="text-[11px] text-slate-400 mt-1">
