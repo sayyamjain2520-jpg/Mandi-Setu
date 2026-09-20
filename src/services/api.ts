@@ -134,6 +134,15 @@ class DataService implements IDataService {
       },
       () => callback()
     )
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'commodities',
+      },
+      () => callback()
+    )
 
   channel.subscribe((status) => {
     console.log('Mandi Realtime:', status)
@@ -559,7 +568,7 @@ class DataService implements IDataService {
           : 'an earlier time'
 
         throw new Error(
-          `Please accept the earlier booking ${oldestPending.booking_number} first. It was submitted at ${createdAt}.`
+          `FIFO rule: Please accept the earlier booking ${oldestPending.booking_number} first. It was submitted at ${createdAt}.`
         )
       }
 
