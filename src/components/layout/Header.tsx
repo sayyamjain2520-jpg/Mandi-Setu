@@ -104,24 +104,38 @@ export const Header: React.FC = () => {
 
   return (
     <>
-      <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-200/80 px-4 lg:px-8 py-2.5">
-        <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
+      <header className="sticky top-0 z-40 w-full bg-white/95 backdrop-blur-md border-b border-slate-200/80 px-2.5 sm:px-4 lg:px-8 py-2.5">
+        <div className="max-w-7xl mx-auto w-full flex items-center justify-between gap-2 sm:gap-3">
 
-          {/* Logo & Brand */}
-          <div className="flex items-center gap-3 min-w-0">
+          {/* =====================================================
+              BRAND
+              ===================================================== */}
+          <div className="flex items-center gap-2 min-w-0 shrink-0">
+
+            {/* Logo */}
             <img
               src="/mandi-setu-logo.png"
               alt="Mandi Setu"
-              className="w-10 h-10 rounded-xl object-contain shadow-sm ring-2 ring-emerald-500/20 shrink-0"
+              className="
+                w-9 h-9
+                sm:w-10 sm:h-10
+                rounded-xl
+                object-contain
+                shadow-sm
+                ring-2
+                ring-emerald-500/20
+                shrink-0
+              "
             />
 
-            <div className="min-w-0">
+            {/* Desktop Brand Text ONLY */}
+            <div className="hidden sm:block min-w-0">
               <div className="flex items-center gap-2">
-                <span className="font-black text-base tracking-tight text-slate-900 uppercase font-mono">
+                <span className="font-black text-base tracking-tight text-slate-900 uppercase font-mono whitespace-nowrap">
                   MANDI SETU
                 </span>
 
-                <span className="hidden sm:inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 uppercase">
+                <span className="hidden lg:inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 uppercase whitespace-nowrap">
                   Govt of India APMC
                 </span>
               </div>
@@ -132,13 +146,17 @@ export const Header: React.FC = () => {
             </div>
           </div>
 
-          {/* Right Side */}
-          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+          {/* =====================================================
+              RIGHT CONTROLS
+              ===================================================== */}
+          <div className="flex items-center gap-1 sm:gap-2 lg:gap-3 shrink-0 max-w-[calc(100vw-56px)]">
 
-            {/* LANGUAGE DROPDOWN */}
+            {/* =================================================
+                LANGUAGE
+                ================================================= */}
             <div
               ref={languageRef}
-              className="relative"
+              className="relative shrink-0"
             >
               <button
                 type="button"
@@ -148,9 +166,28 @@ export const Header: React.FC = () => {
                 onClick={() =>
                   setIsLanguageMenuOpen((open) => !open)
                 }
-                className="flex items-center gap-2 h-9 px-3 rounded-xl border border-slate-200 bg-white text-slate-700 shadow-sm hover:border-emerald-300 hover:bg-emerald-50/50 transition-all"
+                className="
+                  flex
+                  items-center
+                  justify-center
+                  gap-1.5
+                  h-9
+                  w-10
+                  sm:w-auto
+                  sm:px-3
+                  rounded-xl
+                  border
+                  border-slate-200
+                  bg-white
+                  text-slate-700
+                  shadow-sm
+                  hover:border-emerald-300
+                  hover:bg-emerald-50/50
+                  transition-all
+                  shrink-0
+                "
               >
-                <Languages className="w-4 h-4 text-emerald-700" />
+                <Languages className="w-4 h-4 text-emerald-700 shrink-0" />
 
                 <span className="hidden sm:inline text-xs font-bold whitespace-nowrap">
                   {currentLanguage.label}
@@ -183,9 +220,7 @@ export const Header: React.FC = () => {
                         key={language.code}
                         type="button"
                         onClick={() =>
-                          handleLanguageChange(
-                            language.code
-                          )
+                          handleLanguageChange(language.code)
                         }
                         className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition ${
                           isSelected
@@ -193,9 +228,7 @@ export const Header: React.FC = () => {
                             : 'text-slate-700 hover:bg-slate-50'
                         }`}
                       >
-                        <span>
-                          {language.label}
-                        </span>
+                        <span>{language.label}</span>
 
                         {isSelected && (
                           <Check className="w-4 h-4 text-emerald-700" />
@@ -207,26 +240,48 @@ export const Header: React.FC = () => {
               )}
             </div>
 
-            {/* ROLE SWITCHER */}
-            <div className="relative">
+            {/* =================================================
+                ROLE SWITCHER
+                ================================================= */}
+            <div className="relative shrink-0">
               <button
+                type="button"
                 onClick={() =>
                   setIsRoleMenuOpen(!isRoleMenuOpen)
                 }
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold transition shadow-2xs ${activeRoleBadge.bg} ${activeRoleBadge.color}`}
+                className={`
+                  flex
+                  items-center
+                  justify-center
+                  gap-1
+                  h-9
+                  px-1.5
+                  sm:px-3
+                  rounded-xl
+                  border
+                  text-xs
+                  font-bold
+                  transition
+                  shadow-2xs
+                  shrink-0
+                  ${activeRoleBadge.bg}
+                  ${activeRoleBadge.color}
+                `}
                 title="Switch active role persona"
               >
-                <UserCheck className="w-3.5 h-3.5" />
+                <UserCheck className="w-4 h-4 shrink-0" />
 
-                <span className="hidden md:inline">
+                {/* Desktop */}
+                <span className="hidden md:inline whitespace-nowrap">
                   {activeRoleBadge.title}
                 </span>
 
-                <span className="md:hidden capitalize">
-                  {role}
+                {/* Mobile */}
+                <span className="md:hidden whitespace-nowrap">
+                  Farmer
                 </span>
 
-                <ChevronDown className="w-3 h-3 ml-0.5 opacity-60" />
+                <ChevronDown className="w-3 h-3 opacity-60 shrink-0" />
               </button>
 
               {isRoleMenuOpen && (
@@ -240,6 +295,7 @@ export const Header: React.FC = () => {
                   </div>
 
                   <button
+                    type="button"
                     onClick={() =>
                       handleRoleChange('farmer')
                     }
@@ -250,12 +306,11 @@ export const Header: React.FC = () => {
                     }`}
                   >
                     <span>🌾 Farmer Portal (Kisan)</span>
-                    {role === 'farmer' && (
-                      <span>✓</span>
-                    )}
+                    {role === 'farmer' && <span>✓</span>}
                   </button>
 
                   <button
+                    type="button"
                     onClick={() =>
                       handleRoleChange('operator')
                     }
@@ -266,12 +321,11 @@ export const Header: React.FC = () => {
                     }`}
                   >
                     <span>⚖️ Mandi Operator (Gate/Weigh)</span>
-                    {role === 'operator' && (
-                      <span>✓</span>
-                    )}
+                    {role === 'operator' && <span>✓</span>}
                   </button>
 
                   <button
+                    type="button"
                     onClick={() =>
                       handleRoleChange('admin')
                     }
@@ -282,52 +336,90 @@ export const Header: React.FC = () => {
                     }`}
                   >
                     <span>📊 Administrator (Directorate)</span>
-                    {role === 'admin' && (
-                      <span>✓</span>
-                    )}
+                    {role === 'admin' && <span>✓</span>}
                   </button>
                 </div>
               )}
             </div>
 
-            {/* SMS LOGS */}
+            {/* =================================================
+                SMS LOGS — DESKTOP ONLY
+                ================================================= */}
             <button
+              type="button"
               onClick={() =>
                 setIsSmsDrawerOpen(true)
               }
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-100 text-xs font-medium transition"
+              className="
+                hidden
+                lg:flex
+                items-center
+                gap-1.5
+                px-2.5
+                py-1.5
+                rounded-xl
+                border
+                border-slate-200
+                text-slate-700
+                hover:bg-slate-100
+                text-xs
+                font-medium
+                transition
+                shrink-0
+              "
               title="Open simulated SMS logs"
             >
               <Smartphone className="w-3.5 h-3.5 text-emerald-600" />
-
-              <span className="hidden sm:inline">
-                SMS Logs
-              </span>
+              <span>SMS Logs</span>
             </button>
 
-            {/* NOTIFICATIONS */}
+            {/* =================================================
+                NOTIFICATIONS
+                ================================================= */}
             <button
+              type="button"
               onClick={() => setIsNotifOpen(true)}
-              className="relative p-2 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition"
+              className="
+                relative
+                p-2
+                rounded-xl
+                text-slate-600
+                hover:text-slate-900
+                hover:bg-slate-100
+                transition
+                shrink-0
+              "
               aria-label="Open notifications"
             >
               <Bell className="w-5 h-5" />
 
               {unreadCount > 0 && (
-                <span className="absolute top-1 right-1 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-rose-600 px-1 text-[10px] font-black text-white shadow-xs animate-pulse">
+                <span className="absolute top-0.5 right-0.5 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-rose-600 px-1 text-[10px] font-black text-white shadow-xs">
                   {unreadCount}
                 </span>
               )}
             </button>
 
-            {/* LOGOUT */}
+            {/* =================================================
+                LOGOUT
+                ================================================= */}
             {user && (
               <button
+                type="button"
                 onClick={logout}
-                className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition"
+                className="
+                  p-2
+                  text-slate-400
+                  hover:text-rose-600
+                  hover:bg-rose-50
+                  rounded-xl
+                  transition
+                  shrink-0
+                "
                 title="Sign out / Switch user"
+                aria-label="Sign out"
               >
-                <LogOut className="w-4 h-4" />
+                <LogOut className="w-5 h-5" />
               </button>
             )}
           </div>
