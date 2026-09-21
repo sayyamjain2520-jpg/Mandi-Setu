@@ -9,6 +9,8 @@ export interface ProcurementCentre {
   longitude: number
   contactPhone: string
   operationalStatus: 'active' | 'inactive' | 'closed'
+  availabilityNote?: string
+  reopenAt?: string
   dailyCapacityQuintals: number
   operatingHours: {
     open: string

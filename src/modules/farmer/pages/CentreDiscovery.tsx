@@ -89,6 +89,24 @@ export const CentreDiscovery: React.FC<CentreDiscoveryProps> = ({ centres, onSel
                 </div>
               </div>
 
+              {centre.operationalStatus !== 'active' && (
+                <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 p-3">
+                  <p className="text-xs font-black text-rose-900">
+                    New bookings are temporarily unavailable
+                  </p>
+                  {centre.availabilityNote && (
+                    <p className="mt-1 text-[11px] leading-5 text-rose-800">
+                      {centre.availabilityNote}
+                    </p>
+                  )}
+                  {centre.reopenAt && (
+                    <p className="mt-1 text-[11px] font-semibold text-rose-700">
+                      Reopens: {new Date(centre.reopenAt).toLocaleString('en-IN')}
+                    </p>
+                  )}
+                </div>
+              )}
+
               <div className="mt-4 flex items-center justify-between gap-2 pt-3 border-t border-slate-100">
                 <div className="text-xs">
                   <span className="text-slate-500">Live Avg Wait: </span>
@@ -100,10 +118,11 @@ export const CentreDiscovery: React.FC<CentreDiscoveryProps> = ({ centres, onSel
                 <Button
                   size="sm"
                   variant="primary"
+                  disabled={centre.operationalStatus !== 'active'}
                   onClick={() => onSelectCentre(centre.id)}
                   leftIcon={<CalendarPlus className="w-4 h-4" />}
                 >
-                  Book Slot
+                  {centre.operationalStatus === 'active' ? 'Book Slot' : 'Mandi Closed'}
                 </Button>
               </div>
             </Card>

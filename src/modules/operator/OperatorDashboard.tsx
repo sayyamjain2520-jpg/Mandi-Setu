@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useAuth } from '@/context/AuthContext'
 import { api } from '@/services/api'
+import type { GateVerificationDetails } from '@/services/api'
 import type {
   Booking,
   QueueEntry,
@@ -12,6 +13,7 @@ import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { StatusPill } from '@/components/ui/Badge'
 import { GateScanner } from '@/components/qr/GateScanner'
+import { GateVerificationModal } from '@/modules/operator/components/GateVerificationModal'
 import { ProcurementEntryModal } from '@/modules/operator/components/ProcurementEntryModal'
 import {
   Volume2,
@@ -52,6 +54,12 @@ export const OperatorDashboard: React.FC = () => {
   const [isWeighing, setIsWeighing] = useState(false)
   const [processingBookingId, setProcessingBookingId] =
     useState<string | null>(null)
+
+  const [gateVerification, setGateVerification] =
+    useState<GateVerificationDetails | null>(null)
+  const [gateIdentityChecked, setGateIdentityChecked] = useState(false)
+  const [gateVehicleChecked, setGateVehicleChecked] = useState(false)
+  const [isGateAdmitting, setIsGateAdmitting] = useState(false)
 
   // ------------------------------------------------------------
   // Assigned mandi is the single source of truth.
@@ -217,31 +225,78 @@ export const OperatorDashboard: React.FC = () => {
     setFeedbackMessage(null)
 
     try {
-      const res = await api.checkInAtGate(tokenOrBooking)
+      const details = await api.getGateVerificationDetails(
+        tokenOrBooking,
+        assignedCentreId
+      )
 
-      if (res.success) {
-        setFeedbackMessage({
-          type: 'success',
-          text: res.message,
-        })
-
-        await loadData(assignedCentreId)
-      } else {
+      if (!details) {
         setFeedbackMessage({
           type: 'error',
-          text: res.message,
+          text: 'Invalid or expired token / booking number.',
         })
+        return
       }
+
+      setGateIdentityChecked(false)
+      setGateVehicleChecked(false)
+      setGateVerification(details)
     } catch (error) {
-      console.error('Gate verification error:', error)
+      console.error('Gate verification lookup error:', error)
 
       setFeedbackMessage({
         type: 'error',
         text:
           error instanceof Error
             ? error.message
-            : 'Failed to verify farmer token.',
+            : 'Failed to load farmer verification details.',
       })
+    }
+  }
+
+  const handleConfirmGateAdmission = async () => {
+    if (!gateVerification || isGateAdmitting) return
+
+    setIsGateAdmitting(true)
+    setFeedbackMessage(null)
+
+    try {
+      const query =
+        gateVerification.booking.tokenNumber ||
+        gateVerification.booking.bookingNumber
+
+      const res = await api.checkInAtGate(query)
+
+      if (!res.success) {
+        setFeedbackMessage({
+          type: 'error',
+          text: res.message,
+        })
+        return
+      }
+
+      setGateVerification(null)
+      setGateIdentityChecked(false)
+      setGateVehicleChecked(false)
+
+      setFeedbackMessage({
+        type: 'success',
+        text: res.message,
+      })
+
+      await loadData(assignedCentreId)
+    } catch (error) {
+      console.error('Gate admission error:', error)
+
+      setFeedbackMessage({
+        type: 'error',
+        text:
+          error instanceof Error
+            ? error.message
+            : 'Failed to admit farmer at the gate.',
+      })
+    } finally {
+      setIsGateAdmitting(false)
     }
   }
 
@@ -1168,31 +1223,18 @@ export const OperatorDashboard: React.FC = () => {
                         </Button>
                       )}
 
-                      {/* Called -> Gate Passed */}
+                      {/* QR verification is the only way to admit a called token. */}
                       {entry.currentStage ===
                         'called_to_gate' && (
-                        <Button
-                          size="sm"
-                          variant="primary"
-                          onClick={() =>
-                            handleUpdateStage(
-                              entry.id,
-                              'gate_passed'
-                            )
-                          }
-                          leftIcon={
-                            <CheckCircle2 className="w-3.5 h-3.5" />
-                          }
-                        >
-                          Mark Gate Admitted
-                        </Button>
+                        <span className="inline-flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          Awaiting QR Gate Verification
+                        </span>
                       )}
 
                       {/* Gate -> QC */}
-                      {(entry.currentStage ===
-                        'gate_passed' ||
-                        entry.currentStage ===
-                          'called_to_gate') && (
+                      {entry.currentStage ===
+                        'gate_passed' && (
                         <Button
                           size="sm"
                           variant="outline"
@@ -1207,11 +1249,9 @@ export const OperatorDashboard: React.FC = () => {
                         </Button>
                       )}
 
-                      {/* QC / Gate -> Weighbridge */}
-                      {(entry.currentStage ===
-                        'quality_check' ||
-                        entry.currentStage ===
-                          'gate_passed') && (
+                      {/* QC -> Weighbridge */}
+                      {entry.currentStage ===
+                        'quality_check' && (
                         <Button
                           size="sm"
                           variant="outline"
@@ -1328,6 +1368,23 @@ export const OperatorDashboard: React.FC = () => {
           isLoading={isWeighing}
         />
       )}
+
+
+      <GateVerificationModal
+        details={gateVerification}
+        isLoading={isGateAdmitting}
+        identityChecked={gateIdentityChecked}
+        vehicleChecked={gateVehicleChecked}
+        onIdentityCheckedChange={setGateIdentityChecked}
+        onVehicleCheckedChange={setGateVehicleChecked}
+        onConfirm={handleConfirmGateAdmission}
+        onClose={() => {
+          if (isGateAdmitting) return
+          setGateVerification(null)
+          setGateIdentityChecked(false)
+          setGateVehicleChecked(false)
+        }}
+      />
 
     </div>
   )

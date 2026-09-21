@@ -78,14 +78,16 @@ export const AdminDashboard: React.FC = () => {
   }
 
   // Toggle procurement centre status
-  const handleToggleCentreStatus = async (
+  const handleSetCentreStatus = async (
     id: string,
-    currentStatus: ProcurementCentre['operationalStatus']
+    nextStatus: ProcurementCentre['operationalStatus'],
+    availabilityNote = '',
+    reopenAt = ''
   ) => {
-    const next = currentStatus === 'active' ? 'closed' : 'active'
-
     await api.updateCentre(id, {
-      operationalStatus: next,
+      operationalStatus: nextStatus,
+      availabilityNote: nextStatus === 'closed' ? availabilityNote : '',
+      reopenAt: nextStatus === 'closed' ? reopenAt : '',
     })
 
     await loadData()
@@ -467,7 +469,7 @@ export const AdminDashboard: React.FC = () => {
           centres={centres}
           onAddCentre={handleAddCentre}
           onUpdateCentre={handleUpdateCentre}
-          onToggleStatus={handleToggleCentreStatus}
+          onToggleStatus={handleSetCentreStatus}
         />
       )}
 

@@ -13,6 +13,13 @@ import type {
 import type { ProcurementCentre } from '@/types/mandi.types'
 import type { AppNotification, SmsLogEntry } from '@/types/notification.types'
 
+export interface GateVerificationDetails {
+  booking: Booking
+  queueEntry: QueueEntry
+  identityStatus: 'verified_profile' | 'profile_id_missing'
+  kisanId?: string
+}
+
 export interface IDataService {
   isCloudMode(): boolean
   getCentres(): Promise<ProcurementCentre[]>
@@ -22,6 +29,7 @@ export interface IDataService {
   getBookings(farmerId?: string, centreId?: string): Promise<Booking[]>
   getBookingById(id: string): Promise<Booking | undefined>
   getBookingByNumberOrToken(query: string): Promise<Booking | undefined>
+  getGateVerificationDetails(query: string, centreId?: string): Promise<GateVerificationDetails | null>
   createBooking(params: {
     farmerId: string
     farmerName: string
@@ -201,6 +209,8 @@ class DataService implements IDataService {
           longitude: Number(d.longitude) || 0,
           contactPhone: d.contact_phone || '',
           operationalStatus: d.operational_status,
+          availabilityNote: d.availability_note || '',
+          reopenAt: d.reopen_at || '',
           dailyCapacityQuintals: Number(d.daily_capacity_quintals) || 5000,
           operatingHours: d.operating_hours || { open: d.open_time || '08:00', close: d.close_time || '18:00' },
           avgWaitTimeMinutes: 20,
@@ -389,25 +399,31 @@ class DataService implements IDataService {
       const q = query.trim().toUpperCase()
       const { data } = await supabase
         .from('bookings')
-        .select('*')
+        .select(`
+          *,
+          profiles:profiles!bookings_farmer_id_fkey(full_name, phone_number, kisan_id),
+          procurement_centres:procurement_centres!bookings_centre_id_fkey(name),
+          commodities:commodities!bookings_commodity_id_fkey(name)
+        `)
         .or(`booking_number.eq.${q},token_number.eq.${q}`)
         .maybeSingle()
+
       if (data) {
         return {
           id: data.id,
           bookingNumber: data.booking_number,
           farmerId: data.farmer_id,
-          farmerName: 'Farmer',
-          farmerPhone: '',
+          farmerName: data.profiles?.full_name || 'Farmer',
+          farmerPhone: data.profiles?.phone_number || '',
           centreId: data.centre_id,
-          centreName: 'Procurement Centre',
+          centreName: data.procurement_centres?.name || 'Procurement Centre',
           commodityId: data.commodity_id,
-          commodityName: 'Crop',
+          commodityName: data.commodities?.name || 'Crop',
           slotDate: data.slot_date,
           slotTimeStart: data.slot_time_start,
           slotTimeEnd: data.slot_time_end,
           estimatedQuantityQuintals: Number(data.estimated_quantity_quintals) || 0,
-          numberOfVehicles: Number(data.number_of_vehicles),
+          numberOfVehicles: Number(data.number_of_vehicles) || 1,
           vehicleType: data.vehicle_type,
           vehicleNumber: data.vehicle_number,
           status: data.status,
@@ -421,6 +437,49 @@ class DataService implements IDataService {
     }
     if (this.isCloudMode() && supabase) return undefined
     return localStore.getBookingByNumberOrToken(query)
+  }
+
+  public async getGateVerificationDetails(
+    query: string,
+    centreId?: string
+  ): Promise<GateVerificationDetails | null> {
+    const booking = await this.getBookingByNumberOrToken(query)
+
+    if (!booking) return null
+
+    if (centreId && booking.centreId !== centreId) {
+      throw new Error('This booking belongs to a different procurement centre.')
+    }
+
+    const queueEntries = await this.getQueue(booking.centreId)
+    const queueEntry = queueEntries.find((entry) => entry.bookingId === booking.id)
+
+    if (!queueEntry) {
+      throw new Error('No active queue entry exists for this booking.')
+    }
+
+    if (this.isCloudMode() && supabase) {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('kisan_id')
+        .eq('id', booking.farmerId)
+        .maybeSingle()
+
+      const kisanId = profile?.kisan_id || undefined
+
+      return {
+        booking,
+        queueEntry,
+        identityStatus: kisanId ? 'verified_profile' : 'profile_id_missing',
+        kisanId,
+      }
+    }
+
+    return {
+      booking,
+      queueEntry,
+      identityStatus: 'verified_profile',
+    }
   }
 
     public async createBooking(params: {
@@ -442,7 +501,27 @@ class DataService implements IDataService {
 
     if (this.isCloudMode() && client) {
 
-      // 1. Verify that the selected time slot exists
+      // 1. Closed/inactive mandis must never accept new booking requests.
+      const { data: centreData, error: centreError } = await client
+        .from('procurement_centres')
+        .select('id, name, operational_status, availability_note, reopen_at')
+        .eq('id', params.centreId)
+        .maybeSingle()
+
+      if (centreError || !centreData) {
+        throw new Error(centreError?.message || 'Selected mandi could not be found.')
+      }
+
+      if (centreData.operational_status !== 'active') {
+        const reopenText = centreData.reopen_at
+          ? ` Reopens ${new Date(centreData.reopen_at).toLocaleString('en-IN')}.`
+          : ''
+        throw new Error(
+          `This mandi is currently not accepting new bookings.${centreData.availability_note ? ` ${centreData.availability_note}` : ''}${reopenText}`
+        )
+      }
+
+      // 2. Verify that the selected time slot exists
       const { data: slotData, error: slotFetchError } = await client
         .from('time_slots')
         .select('id')
@@ -572,6 +651,26 @@ class DataService implements IDataService {
         )
       }
 
+      // Do not accept pending requests while the mandi is closed/inactive.
+      const { data: acceptanceCentre, error: acceptanceCentreError } = await client
+        .from('procurement_centres')
+        .select('operational_status, availability_note, reopen_at')
+        .eq('id', booking.centre_id)
+        .maybeSingle()
+
+      if (acceptanceCentreError || !acceptanceCentre) {
+        throw new Error(acceptanceCentreError?.message || 'Procurement centre could not be verified.')
+      }
+
+      if (acceptanceCentre.operational_status !== 'active') {
+        const reopenText = acceptanceCentre.reopen_at
+          ? ` Reopens ${new Date(acceptanceCentre.reopen_at).toLocaleString('en-IN')}.`
+          : ''
+        throw new Error(
+          `This mandi is currently closed, so pending bookings cannot be accepted.${acceptanceCentre.availability_note ? ` ${acceptanceCentre.availability_note}` : ''}${reopenText}`
+        )
+      }
+
       // 3. Enforce FIFO acceptance at the mandi.
       // The operator must accept the oldest pending booking first.
       // This prevents a later request from being accepted while an earlier
@@ -628,32 +727,22 @@ class DataService implements IDataService {
         )
       }
 
-      // 5. Generate the next token number only NOW — after operator acceptance.
-      // Token numbering is per procurement centre, NOT per slot/date.
-      // This keeps one continuous FIFO sequence: T-001, T-002, T-003...
-      // Completed entries remain part of the history, so their token numbers
-      // are never silently replaced by a new day's booking.
-      const { data: issuedTokens, error: tokenSequenceError } = await client
+      // 5. Generate token only NOW — after operator acceptance
+      const { count: confirmedCount, error: countError } = await client
         .from('bookings')
-        .select('token_number')
+        .select('id', { count: 'exact', head: true })
         .eq('centre_id', booking.centre_id)
-        .not('token_number', 'is', null)
+        .eq('slot_date', booking.slot_date)
+        .not('status', 'in', '(pending,rejected,cancelled)')
 
-      if (tokenSequenceError) {
-        throw new Error(
-          `Failed to calculate token sequence: ${tokenSequenceError.message}`
+      if (countError) {
+        console.error(
+          'Failed to calculate token sequence:',
+          countError
         )
       }
 
-      const highestIssuedToken = (issuedTokens || []).reduce((max, row) => {
-        const value = Number.parseInt(
-          String(row.token_number || '').replace(/\D/g, ''),
-          10
-        )
-        return Number.isFinite(value) ? Math.max(max, value) : max
-      }, 0)
-
-      const tokenSeq = highestIssuedToken + 1
+      const tokenSeq = (confirmedCount || 0) + 1
       const tokenNumber = `T-${String(tokenSeq).padStart(3, '0')}`
 
       // 6. Generate QR only NOW
@@ -710,10 +799,7 @@ class DataService implements IDataService {
         )
       }
 
-      // 9. Calculate live queue information.
-      // `priority_order` must follow the same continuous FIFO sequence as
-      // the token number. Never renumber the queue just because an earlier
-      // token has completed.
+      // 9. Calculate queue position
       const { count: queueCount, error: queueCountError } =
         await client
           .from('queue_entries')
@@ -735,9 +821,7 @@ class DataService implements IDataService {
         )
       }
 
-      // FIFO priority is immutable for the lifetime of an issued token.
-      // Example: T-001 settled + T-002 waiting + new booking => T-003.
-      const priorityOrder = tokenSeq
+      const priorityOrder = (queueCount || 0) + 1
 
       // Smart Arrival Engine replaces the old hard-coded
       // priorityOrder * 12 calculation.
@@ -1285,12 +1369,16 @@ class DataService implements IDataService {
       }
 
       // QR scanning is the physical gate action.
-      // A token can be scanned while waiting OR after the operator calls it.
-      // FIFO below decides whether that scan is allowed.
-      if (
-        existingQueue.current_stage !== 'waiting' &&
-        existingQueue.current_stage !== 'called_to_gate'
-      ) {
+      // A token must first be explicitly called to the gate. A waiting token
+      // is not allowed to self-admit simply by presenting/scanning its QR.
+      if (existingQueue.current_stage !== 'called_to_gate') {
+        if (existingQueue.current_stage === 'waiting') {
+          return {
+            success: false,
+            message: `Token ${booking.token_number || 'N/A'} is still waiting in the queue. Please wait until the operator calls you to the gate.`,
+          }
+        }
+
         return {
           success: false,
           message: `Gate check-in is not available because this token is already at "${existingQueue.current_stage}".`,
@@ -2046,6 +2134,8 @@ await client
           longitude: centre.longitude,
           contact_phone: centre.contactPhone,
           operational_status: centre.operationalStatus,
+          availability_note: centre.availabilityNote || null,
+          reopen_at: centre.reopenAt || null,
           daily_capacity_quintals: centre.dailyCapacityQuintals,
           open_time: centre.operatingHours.open,
           close_time: centre.operatingHours.close,
@@ -2065,6 +2155,8 @@ await client
         longitude: Number(data.longitude),
         contactPhone: data.contact_phone,
         operationalStatus: data.operational_status,
+        availabilityNote: data.availability_note || '',
+        reopenAt: data.reopen_at || '',
         dailyCapacityQuintals: Number(data.daily_capacity_quintals),
         operatingHours: { open: data.open_time, close: data.close_time },
       }
@@ -2117,6 +2209,14 @@ await client
 
       if (updates.operationalStatus !== undefined) {
         payload.operational_status = updates.operationalStatus
+      }
+
+      if (updates.availabilityNote !== undefined) {
+        payload.availability_note = updates.availabilityNote || null
+      }
+
+      if (updates.reopenAt !== undefined) {
+        payload.reopen_at = updates.reopenAt || null
       }
 
       if (updates.dailyCapacityQuintals !== undefined) {

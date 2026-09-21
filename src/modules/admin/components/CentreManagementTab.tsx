@@ -31,7 +31,9 @@ interface CentreManagementTabProps {
   ) => Promise<void>
   onToggleStatus: (
     id: string,
-    currentStatus: ProcurementCentre['operationalStatus']
+    nextStatus: ProcurementCentre['operationalStatus'],
+    availabilityNote?: string,
+    reopenAt?: string
   ) => Promise<void>
 }
 
@@ -76,6 +78,15 @@ export const CentreManagementTab: React.FC<CentreManagementTabProps> = ({
   const [closeTime, setCloseTime] = useState('18:00')
 
   const [isLoading, setIsLoading] = useState(false)
+
+  const [availabilityCentre, setAvailabilityCentre] =
+    useState<ProcurementCentre | null>(null)
+  const [availabilityStatus, setAvailabilityStatus] =
+    useState<ProcurementCentre['operationalStatus']>('active')
+  const [availabilityNote, setAvailabilityNote] = useState('')
+  const [reopenAt, setReopenAt] = useState('')
+  const [availabilitySaving, setAvailabilitySaving] = useState(false)
+  const [availabilityError, setAvailabilityError] = useState('')
 
   // ------------------------------------------------------------
   // Mandi → Operator relationship
@@ -330,6 +341,70 @@ export const CentreManagementTab: React.FC<CentreManagementTabProps> = ({
     }
   }
 
+  const openAvailabilityModal = (centre: ProcurementCentre) => {
+    setAvailabilityCentre(centre)
+    setAvailabilityStatus(centre.operationalStatus === 'inactive' ? 'closed' : centre.operationalStatus)
+    setAvailabilityNote(centre.availabilityNote || '')
+
+    const reopenDate = centre.reopenAt ? new Date(centre.reopenAt) : null
+    if (reopenDate && !Number.isNaN(reopenDate.getTime())) {
+      const localValue = new Date(
+        reopenDate.getTime() - reopenDate.getTimezoneOffset() * 60000
+      )
+        .toISOString()
+        .slice(0, 16)
+      setReopenAt(localValue)
+    } else {
+      setReopenAt('')
+    }
+
+    setAvailabilityError('')
+  }
+
+  const closeAvailabilityModal = () => {
+    if (availabilitySaving) return
+    setAvailabilityCentre(null)
+    setAvailabilityNote('')
+    setReopenAt('')
+    setAvailabilityError('')
+  }
+
+  const handleAvailabilitySubmit = async (event: React.FormEvent) => {
+    event.preventDefault()
+    if (!availabilityCentre) return
+
+    const note = availabilityNote.trim()
+    if (availabilityStatus === 'closed' && !note) {
+      setAvailabilityError('Please provide a closure reason.')
+      return
+    }
+
+    setAvailabilitySaving(true)
+    setAvailabilityError('')
+
+    try {
+      const normalizedReopenAt =
+        availabilityStatus === 'closed' && reopenAt
+          ? new Date(reopenAt).toISOString()
+          : ''
+
+      await onToggleStatus(
+        availabilityCentre.id,
+        availabilityStatus,
+        availabilityStatus === 'closed' ? note : '',
+        normalizedReopenAt
+      )
+
+      closeAvailabilityModal()
+    } catch (error) {
+      setAvailabilityError(
+        error instanceof Error ? error.message : 'Unable to update mandi availability.'
+      )
+    } finally {
+      setAvailabilitySaving(false)
+    }
+  }
+
   const resetForm = () => {
     setCode('')
     setName('')
@@ -513,6 +588,24 @@ export const CentreManagementTab: React.FC<CentreManagementTabProps> = ({
                     <h3 className="mt-3 text-lg font-bold text-slate-900">
                       {centre.name}
                     </h3>
+
+                    {centre.operationalStatus !== 'active' && (
+                      <div className="mt-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2">
+                        <p className="text-[10px] font-black uppercase tracking-wider text-rose-700">
+                          New bookings paused
+                        </p>
+                        {centre.availabilityNote && (
+                          <p className="mt-1 text-xs text-rose-800">
+                            {centre.availabilityNote}
+                          </p>
+                        )}
+                        {centre.reopenAt && (
+                          <p className="mt-1 text-[11px] font-semibold text-rose-700">
+                            Reopens {new Date(centre.reopenAt).toLocaleString('en-IN')}
+                          </p>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   <Button
@@ -714,25 +807,26 @@ export const CentreManagementTab: React.FC<CentreManagementTabProps> = ({
                 {/* Bottom Actions */}
                 <div className="mt-5 flex flex-wrap gap-2 border-t border-slate-100 pt-4">
                   <Button
-                    variant="outline"
-                    onClick={() =>
-                      onToggleStatus(
-                        centre.id,
-                        centre.operationalStatus
-                      )
-                    }
+                    variant={centre.operationalStatus === 'active' ? 'outline' : 'success'}
+                    onClick={() => openAvailabilityModal(centre)}
                   >
                     <Power className="mr-2 h-4 w-4" />
-
                     {centre.operationalStatus === 'active'
-                      ? 'Deactivate'
-                      : 'Activate'}
+                      ? 'Manage Availability'
+                      : 'Reopen Mandi'}
                   </Button>
 
-                  {centre.operationalStatus === 'active' && (
+                  {centre.operationalStatus === 'active' ? (
                     <div className="flex items-center gap-2 text-xs text-emerald-600">
                       <CheckCircle2 className="h-4 w-4" />
                       Centre accepting bookings
+                    </div>
+                  ) : (
+                    <div className="flex flex-col justify-center text-xs text-rose-700">
+                      <span className="font-semibold">New bookings paused</span>
+                      {centre.reopenAt && (
+                        <span className="text-[11px]">Reopens {new Date(centre.reopenAt).toLocaleString('en-IN')}</span>
+                      )}
                     </div>
                   )}
                 </div>
@@ -741,6 +835,82 @@ export const CentreManagementTab: React.FC<CentreManagementTabProps> = ({
           ))}
         </div>
       )}
+
+      <Modal
+        isOpen={!!availabilityCentre}
+        onClose={closeAvailabilityModal}
+        title="Mandi Availability Control"
+        subtitle={availabilityCentre?.name}
+        maxWidth="md"
+      >
+        <form onSubmit={handleAvailabilitySubmit} className="space-y-5">
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => setAvailabilityStatus('active')}
+              className={`rounded-xl border px-4 py-3 text-sm font-bold transition ${
+                availabilityStatus === 'active'
+                  ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
+                  : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              OPEN
+              <span className="block text-[10px] font-medium mt-0.5 opacity-70">Accept new bookings</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setAvailabilityStatus('closed')}
+              className={`rounded-xl border px-4 py-3 text-sm font-bold transition ${
+                availabilityStatus === 'closed'
+                  ? 'border-rose-300 bg-rose-50 text-rose-800'
+                  : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              CLOSED
+              <span className="block text-[10px] font-medium mt-0.5 opacity-70">Pause new bookings</span>
+            </button>
+          </div>
+
+          {availabilityStatus === 'closed' && (
+            <>
+              <Input
+                label="Closure Reason"
+                value={availabilityNote}
+                onChange={(e) => setAvailabilityNote(e.target.value)}
+                placeholder="e.g. Maintenance / Weather / Procurement complete"
+                required
+              />
+
+              <Input
+                label="Expected Reopen Time (optional)"
+                type="datetime-local"
+                value={reopenAt}
+                onChange={(e) => setReopenAt(e.target.value)}
+              />
+            </>
+          )}
+
+          {availabilityError && (
+            <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700">
+              {availabilityError}
+            </div>
+          )}
+
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
+            Closing a mandi blocks <strong>new booking requests</strong>. Existing accepted farmers already in the live procurement workflow are not automatically removed.
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button type="button" variant="ghost" onClick={closeAvailabilityModal} disabled={availabilitySaving}>
+              Cancel
+            </Button>
+            <Button type="submit" variant={availabilityStatus === 'closed' ? 'danger' : 'success'} isLoading={availabilitySaving}>
+              {availabilityStatus === 'closed' ? 'Close Mandi' : 'Open Mandi'}
+            </Button>
+          </div>
+        </form>
+      </Modal>
 
       {/* Add / Edit Operator Modal */}
       {operatorModal?.centre && (
