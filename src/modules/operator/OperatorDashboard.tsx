@@ -15,6 +15,7 @@ import { StatusPill } from '@/components/ui/Badge'
 import { GateScanner } from '@/components/qr/GateScanner'
 import { GateVerificationModal } from '@/modules/operator/components/GateVerificationModal'
 import { ProcurementEntryModal } from '@/modules/operator/components/ProcurementEntryModal'
+import { QCInspectionModal, type QCResult } from '@/modules/operator/components/QCInspectionModal'
 import {
   Volume2,
   CheckCircle2,
@@ -60,6 +61,11 @@ export const OperatorDashboard: React.FC = () => {
   const [gateIdentityChecked, setGateIdentityChecked] = useState(false)
   const [gateVehicleChecked, setGateVehicleChecked] = useState(false)
   const [isGateAdmitting, setIsGateAdmitting] = useState(false)
+
+  const [selectedQueueForQC, setSelectedQueueForQC] = useState<QueueEntry | null>(null)
+  const [qcResults, setQcResults] = useState<Record<string, QCResult>>({})
+  const [qcCommodityMaxMoisture, setQcCommodityMaxMoisture] = useState<number | undefined>(undefined)
+
 
   // ------------------------------------------------------------
   // Assigned mandi is the single source of truth.
@@ -297,6 +303,107 @@ export const OperatorDashboard: React.FC = () => {
       })
     } finally {
       setIsGateAdmitting(false)
+    }
+  }
+
+  // ------------------------------------------------------------
+  // Quality Control inspection
+  // ------------------------------------------------------------
+  const handleOpenQC = async (entry: QueueEntry) => {
+    setFeedbackMessage(null)
+
+    try {
+      const [existing, commodities] = await Promise.all([
+        api.getQCInspection(entry.id),
+        api.getCommodities(),
+      ])
+
+      if (existing) {
+        const mapped: QCResult = {
+          sampleId: existing.sampleId,
+          sampleWeightKg: existing.sampleWeightKg,
+          moisture: existing.moisture,
+          foreignMatter: existing.foreignMatter,
+          damagedGrains: existing.damagedGrains,
+          otherImpurities: existing.otherImpurities,
+          totalImpurities: existing.totalImpurities,
+          grade: existing.grade,
+          result: existing.result,
+          remarks: existing.remarks,
+          inspectedAt: existing.inspectedAt,
+        }
+        setQcResults((current) => ({ ...current, [entry.id]: mapped }))
+      }
+
+      const booking = bookings.find((item) => item.id === entry.bookingId)
+      const commodity = commodities.find((item) => item.id === booking?.commodityId)
+      setQcCommodityMaxMoisture(
+        commodity?.maxMoisturePercentage ?? undefined
+      )
+      setSelectedQueueForQC(entry)
+    } catch (error) {
+      console.error('Failed to open QC inspection:', error)
+      setFeedbackMessage({
+        type: 'error',
+        text: error instanceof Error ? error.message : 'Failed to load QC inspection details.',
+      })
+    }
+  }
+
+  const handleQCSubmit = async (data: Omit<QCResult, 'inspectedAt'>) => {
+    if (!selectedQueueForQC) return
+
+    const queueEntry = selectedQueueForQC
+    const inspectedAt = new Date().toISOString()
+
+    try {
+      const saved = await api.saveQCInspection({
+        queueEntryId: queueEntry.id,
+        operatorId: user?.id || '',
+        sampleId: data.sampleId,
+        sampleWeightKg: data.sampleWeightKg,
+        moisture: data.moisture,
+        foreignMatter: data.foreignMatter,
+        damagedGrains: data.damagedGrains,
+        otherImpurities: data.otherImpurities,
+        totalImpurities: data.totalImpurities,
+        grade: data.grade,
+        result: data.result,
+        remarks: data.remarks,
+      })
+
+      const mapped: QCResult = {
+        ...data,
+        inspectedAt: saved.inspectedAt || inspectedAt,
+      }
+
+      setQcResults((current) => ({ ...current, [queueEntry.id]: mapped }))
+
+      if (data.result === 'failed') {
+        setSelectedQueueForQC(null)
+        setFeedbackMessage({
+          type: 'error',
+          text: `QC failed for ${queueEntry.tokenNumber}. The inspection is saved and the token remains in QC for re-test or rejection.`,
+        })
+        return
+      }
+
+      // Only a successfully saved QC inspection can move the token to weighbridge.
+      await api.updateQueueStage(queueEntry.id, 'weighbridge')
+      setSelectedQueueForQC(null)
+      setFeedbackMessage({
+        type: 'success',
+        text: data.result === 'passed_with_remarks'
+          ? `QC completed for ${queueEntry.tokenNumber}. Inspection saved; passed with remarks and sent to weighbridge.`
+          : `QC passed for ${queueEntry.tokenNumber}. Inspection saved and sent to weighbridge.`,
+      })
+      await loadData(assignedCentreId)
+    } catch (error) {
+      console.error('Failed to save/advance QC:', error)
+      setFeedbackMessage({
+        type: 'error',
+        text: error instanceof Error ? error.message : 'QC inspection could not be completed.',
+      })
     }
   }
 
@@ -1249,24 +1356,23 @@ export const OperatorDashboard: React.FC = () => {
                         </Button>
                       )}
 
-                      {/* QC -> Weighbridge */}
-                      {entry.currentStage ===
-                        'quality_check' && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() =>
-                            handleUpdateStage(
-                              entry.id,
-                              'weighbridge'
-                            )
-                          }
-                          leftIcon={
-                            <Scale className="w-3.5 h-3.5" />
-                          }
-                        >
-                          Send to Weighbridge
-                        </Button>
+                      {/* QC inspection */}
+                      {entry.currentStage === 'quality_check' && (
+                        <>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleOpenQC(entry)}
+                            className="font-bold border-indigo-200 text-indigo-700 hover:bg-indigo-50"
+                          >
+                            Open QC Inspection
+                          </Button>
+                          {qcResults[entry.id] && (
+                            <span className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-bold ${qcResults[entry.id].result === 'failed' ? 'border-rose-200 bg-rose-50 text-rose-700' : qcResults[entry.id].result === 'passed_with_remarks' ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700'}`}>
+                              {qcResults[entry.id].result === 'failed' ? 'QC Failed' : qcResults[entry.id].result === 'passed_with_remarks' ? 'QC Passed • Remarks' : 'QC Passed'}
+                            </span>
+                          )}
+                        </>
                       )}
 
                       {/* Weighbridge -> Record Weighment */}
@@ -1347,6 +1453,20 @@ export const OperatorDashboard: React.FC = () => {
 
         </div>
       </div>
+
+      {/* =======================================================
+          QUALITY CONTROL INSPECTION MODAL
+          ======================================================= */}
+      {selectedQueueForQC && (
+        <QCInspectionModal
+          isOpen={!!selectedQueueForQC}
+          entry={selectedQueueForQC}
+          existingResult={qcResults[selectedQueueForQC.id]}
+          commodityMaxMoisture={qcCommodityMaxMoisture}
+          onClose={() => setSelectedQueueForQC(null)}
+          onSubmit={handleQCSubmit}
+        />
+      )}
 
       {/* =======================================================
           WEIGHMENT ENTRY MODAL

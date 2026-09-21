@@ -20,6 +20,25 @@ export interface GateVerificationDetails {
   kisanId?: string
 }
 
+export interface QCInspectionRecord {
+  id: string
+  queueEntryId: string
+  bookingId: string
+  centreId: string
+  operatorId: string
+  sampleId: string
+  sampleWeightKg: number
+  moisture: number
+  foreignMatter: number
+  damagedGrains: number
+  otherImpurities: number
+  totalImpurities: number
+  grade: 'Grade A' | 'Grade B' | 'Fair Average Quality (FAQ)'
+  result: 'passed' | 'passed_with_remarks' | 'failed'
+  remarks: string
+  inspectedAt: string
+}
+
 export interface IDataService {
   isCloudMode(): boolean
   getCentres(): Promise<ProcurementCentre[]>
@@ -62,6 +81,21 @@ export interface IDataService {
   checkInAtGate(tokenOrBookingNumber: string): Promise<{ success: boolean; message: string; entry?: QueueEntry }>
   callNextInQueue(centreId: string): Promise<{ success: boolean; entry?: QueueEntry; message: string }>
   updateQueueStage(queueId: string, stage: QueueStage): Promise<void>
+  getQCInspection(queueEntryId: string): Promise<QCInspectionRecord | null>
+  saveQCInspection(params: {
+    queueEntryId: string
+    operatorId: string
+    sampleId: string
+    sampleWeightKg: number
+    moisture: number
+    foreignMatter: number
+    damagedGrains: number
+    otherImpurities: number
+    totalImpurities: number
+    grade: QCInspectionRecord['grade']
+    result: QCInspectionRecord['result']
+    remarks: string
+  }): Promise<QCInspectionRecord>
   completeUnloading(bookingId: string): Promise<void>
   recordProcurement(params: {
     bookingId: string
@@ -125,6 +159,15 @@ class DataService implements IDataService {
             event: '*',
             schema: 'public',
             table: 'queue_entries',
+          },
+          notifyListeners
+        )
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'qc_inspections',
           },
           notifyListeners
         )
@@ -1711,6 +1754,141 @@ if (bookingUpdateError) {
       return
     }
     localStore.updateQueueStage(queueId, stage)
+  }
+
+  public async getQCInspection(queueEntryId: string): Promise<QCInspectionRecord | null> {
+    const client = supabase
+
+    if (this.isCloudMode() && client) {
+      const { data, error } = await client
+        .from('qc_inspections')
+        .select('*')
+        .eq('queue_entry_id', queueEntryId)
+        .maybeSingle()
+
+      if (error) throw new Error(error.message)
+      if (!data) return null
+
+      return {
+        id: data.id,
+        queueEntryId: data.queue_entry_id,
+        bookingId: data.booking_id,
+        centreId: data.centre_id,
+        operatorId: data.operator_id,
+        sampleId: data.sample_id,
+        sampleWeightKg: Number(data.sample_weight_kg),
+        moisture: Number(data.moisture_percentage),
+        foreignMatter: Number(data.foreign_matter_percentage),
+        damagedGrains: Number(data.damaged_discoloured_percentage),
+        otherImpurities: Number(data.other_impurities_percentage),
+        totalImpurities: Number(data.total_impurities_percentage),
+        grade: data.quality_grade,
+        result: data.result,
+        remarks: data.remarks || '',
+        inspectedAt: data.inspected_at,
+      }
+    }
+
+    return null
+  }
+
+  public async saveQCInspection(params: {
+    queueEntryId: string
+    operatorId: string
+    sampleId: string
+    sampleWeightKg: number
+    moisture: number
+    foreignMatter: number
+    damagedGrains: number
+    otherImpurities: number
+    totalImpurities: number
+    grade: QCInspectionRecord['grade']
+    result: QCInspectionRecord['result']
+    remarks: string
+  }): Promise<QCInspectionRecord> {
+    const client = supabase
+
+    if (!params.sampleId.trim()) throw new Error('Sample ID is required.')
+    if (!Number.isFinite(params.sampleWeightKg) || params.sampleWeightKg <= 0) {
+      throw new Error('Sample weight must be greater than 0 kg.')
+    }
+
+    const percentages = [
+      params.moisture,
+      params.foreignMatter,
+      params.damagedGrains,
+      params.otherImpurities,
+      params.totalImpurities,
+    ]
+    if (percentages.some((value) => !Number.isFinite(value) || value < 0 || value > 100)) {
+      throw new Error('QC percentages must be between 0 and 100.')
+    }
+
+    if (params.result !== 'passed' && !params.remarks.trim()) {
+      throw new Error('Remarks are required for Passed with Remarks or Failed.')
+    }
+
+    if (this.isCloudMode() && client) {
+      const { data: queueEntry, error: queueError } = await client
+        .from('queue_entries')
+        .select('id, booking_id, centre_id, current_stage')
+        .eq('id', params.queueEntryId)
+        .single()
+
+      if (queueError || !queueEntry) {
+        throw new Error(queueError?.message || 'Queue entry not found.')
+      }
+
+      if (queueEntry.current_stage !== 'quality_check') {
+        throw new Error(`QC inspection is only allowed while the token is in Quality Check. Current stage: ${queueEntry.current_stage}.`)
+      }
+
+      const { data, error } = await client
+        .from('qc_inspections')
+        .upsert({
+          queue_entry_id: queueEntry.id,
+          booking_id: queueEntry.booking_id,
+          centre_id: queueEntry.centre_id,
+          operator_id: params.operatorId,
+          sample_id: params.sampleId.trim(),
+          sample_weight_kg: params.sampleWeightKg,
+          moisture_percentage: params.moisture,
+          foreign_matter_percentage: params.foreignMatter,
+          damaged_discoloured_percentage: params.damagedGrains,
+          other_impurities_percentage: params.otherImpurities,
+          total_impurities_percentage: params.totalImpurities,
+          quality_grade: params.grade,
+          result: params.result,
+          remarks: params.remarks.trim() || null,
+          inspected_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'queue_entry_id' })
+        .select()
+        .single()
+
+      if (error || !data) throw new Error(error?.message || 'Failed to save QC inspection.')
+
+      return {
+        id: data.id,
+        queueEntryId: data.queue_entry_id,
+        bookingId: data.booking_id,
+        centreId: data.centre_id,
+        operatorId: data.operator_id,
+        sampleId: data.sample_id,
+        sampleWeightKg: Number(data.sample_weight_kg),
+        moisture: Number(data.moisture_percentage),
+        foreignMatter: Number(data.foreign_matter_percentage),
+        damagedGrains: Number(data.damaged_discoloured_percentage),
+        otherImpurities: Number(data.other_impurities_percentage),
+        totalImpurities: Number(data.total_impurities_percentage),
+        grade: data.quality_grade,
+        result: data.result,
+        remarks: data.remarks || '',
+        inspectedAt: data.inspected_at,
+      }
+    }
+
+    throw new Error('QC inspection persistence is available in Supabase cloud mode only.')
   }
 
   public async recordProcurement(params: {
