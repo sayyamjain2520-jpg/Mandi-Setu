@@ -526,6 +526,80 @@ class LocalStore {
     return newBooking
   }
 
+  public cancelBooking(bookingId: string): Booking {
+    const booking = this.getBookingById(bookingId)
+    if (!booking) {
+      throw new Error('Booking not found')
+    }
+
+    if (booking.status === 'cancelled') {
+      return booking
+    }
+
+    if (booking.status !== 'pending' && booking.status !== 'confirmed' && booking.status !== 'called') {
+      throw new Error(
+        `This booking cannot be cancelled because it is already ${booking.status}.`
+      )
+    }
+
+    const queueEntry = this.state.queueEntries.find(
+      (q) => q.bookingId === booking.id
+    )
+
+    if (booking.status !== 'pending') {
+      if (!queueEntry) {
+        throw new Error('Active queue entry not found for this booking')
+      }
+
+      if (!['waiting', 'called_to_gate'].includes(queueEntry.currentStage)) {
+        throw new Error(
+          'This booking cannot be cancelled after gate check-in has started.'
+        )
+      }
+    }
+
+    booking.status = 'cancelled'
+    booking.tokenNumber = null
+    booking.qrCodeData = null
+    booking.updatedAt = new Date().toISOString()
+
+    if (queueEntry) {
+      this.state.queueEntries = this.state.queueEntries.filter(
+        (q) => q.id !== queueEntry.id
+      )
+
+      const slotIndex = this.state.slots.findIndex(
+        (s) =>
+          s.centreId === booking.centreId &&
+          s.slotDate === booking.slotDate &&
+          s.startTime === booking.slotTimeStart &&
+          s.endTime === booking.slotTimeEnd
+      )
+
+      if (slotIndex >= 0) {
+        this.state.slots[slotIndex].bookedCount = Math.max(
+          0,
+          this.state.slots[slotIndex].bookedCount - 1
+        )
+      }
+    }
+
+    this.state.notifications.unshift({
+      id: `notif-${Date.now()}`,
+      userId: booking.farmerId,
+      title: 'Booking Cancelled',
+      message: `Your procurement request ${booking.bookingNumber} has been cancelled successfully.`,
+      type: 'system',
+      read: false,
+      smsSent: false,
+      createdAt: new Date().toISOString(),
+      metadata: { bookingId: booking.id },
+    })
+
+    this.emit()
+    return booking
+  }
+
   public checkInAtGate(tokenOrBookingNumber: string): { success: boolean; message: string; entry?: QueueEntry } {
     const booking = this.getBookingByNumberOrToken(tokenOrBookingNumber)
     if (!booking) {

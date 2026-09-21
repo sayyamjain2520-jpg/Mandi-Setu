@@ -95,6 +95,7 @@ export const FarmerApp: React.FC = () => {
             bookings={bookings}
             queueEntries={queueEntries}
             onBookNewSlot={() => setActiveTab('book')}
+            onRefresh={loadData}
           />
         )}
 

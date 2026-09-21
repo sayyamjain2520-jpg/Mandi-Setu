@@ -39,6 +39,7 @@ export interface IDataService {
   }): Promise<Booking>
     acceptBooking(bookingId: string): Promise<Booking>
   rejectBooking(bookingId: string): Promise<void>
+  cancelBooking(bookingId: string): Promise<Booking>
   getQueue(centreId?: string): Promise<QueueEntry[]>
   calculateSmartWaitTime(params: {
     centreId: string
@@ -627,22 +628,32 @@ class DataService implements IDataService {
         )
       }
 
-      // 5. Generate token only NOW — after operator acceptance
-      const { count: confirmedCount, error: countError } = await client
+      // 5. Generate the next token number only NOW — after operator acceptance.
+      // Token numbering is per procurement centre, NOT per slot/date.
+      // This keeps one continuous FIFO sequence: T-001, T-002, T-003...
+      // Completed entries remain part of the history, so their token numbers
+      // are never silently replaced by a new day's booking.
+      const { data: issuedTokens, error: tokenSequenceError } = await client
         .from('bookings')
-        .select('id', { count: 'exact', head: true })
+        .select('token_number')
         .eq('centre_id', booking.centre_id)
-        .eq('slot_date', booking.slot_date)
-        .not('status', 'in', '(pending,rejected,cancelled)')
+        .not('token_number', 'is', null)
 
-      if (countError) {
-        console.error(
-          'Failed to calculate token sequence:',
-          countError
+      if (tokenSequenceError) {
+        throw new Error(
+          `Failed to calculate token sequence: ${tokenSequenceError.message}`
         )
       }
 
-      const tokenSeq = (confirmedCount || 0) + 1
+      const highestIssuedToken = (issuedTokens || []).reduce((max, row) => {
+        const value = Number.parseInt(
+          String(row.token_number || '').replace(/\D/g, ''),
+          10
+        )
+        return Number.isFinite(value) ? Math.max(max, value) : max
+      }, 0)
+
+      const tokenSeq = highestIssuedToken + 1
       const tokenNumber = `T-${String(tokenSeq).padStart(3, '0')}`
 
       // 6. Generate QR only NOW
@@ -699,7 +710,10 @@ class DataService implements IDataService {
         )
       }
 
-      // 9. Calculate queue position
+      // 9. Calculate live queue information.
+      // `priority_order` must follow the same continuous FIFO sequence as
+      // the token number. Never renumber the queue just because an earlier
+      // token has completed.
       const { count: queueCount, error: queueCountError } =
         await client
           .from('queue_entries')
@@ -721,7 +735,9 @@ class DataService implements IDataService {
         )
       }
 
-      const priorityOrder = (queueCount || 0) + 1
+      // FIFO priority is immutable for the lifetime of an issued token.
+      // Example: T-001 settled + T-002 waiting + new booking => T-003.
+      const priorityOrder = tokenSeq
 
       // Smart Arrival Engine replaces the old hard-coded
       // priorityOrder * 12 calculation.
@@ -909,6 +925,69 @@ class DataService implements IDataService {
 
     // Local mode compatibility
     return
+  }
+
+  public async cancelBooking(bookingId: string): Promise<Booking> {
+    const client = supabase
+
+    if (this.isCloudMode() && client) {
+      const { data: cancelResult, error: cancelError } = await client.rpc(
+        'cancel_booking',
+        { p_booking_id: bookingId }
+      )
+
+      if (cancelError) {
+        throw new Error(
+          cancelError.message || 'Failed to cancel booking'
+        )
+      }
+
+      if (!cancelResult?.success) {
+        throw new Error(
+          cancelResult?.message || 'Booking could not be cancelled'
+        )
+      }
+
+      const { data: updatedBooking, error: bookingError } = await client
+        .from('bookings')
+        .select('*')
+        .eq('id', bookingId)
+        .single()
+
+      if (bookingError || !updatedBooking) {
+        throw new Error(
+          bookingError?.message || 'Cancelled booking could not be reloaded'
+        )
+      }
+
+      return {
+        id: updatedBooking.id,
+        bookingNumber: updatedBooking.booking_number,
+        farmerId: updatedBooking.farmer_id,
+        farmerName: 'Farmer',
+        farmerPhone: '',
+        centreId: updatedBooking.centre_id,
+        centreName: 'Procurement Centre',
+        commodityId: updatedBooking.commodity_id,
+        commodityName: 'Crop',
+        slotDate: updatedBooking.slot_date,
+        slotTimeStart: updatedBooking.slot_time_start,
+        slotTimeEnd: updatedBooking.slot_time_end,
+        estimatedQuantityQuintals:
+          Number(updatedBooking.estimated_quantity_quintals) || 0,
+        numberOfVehicles: Number(updatedBooking.number_of_vehicles) || 1,
+        vehicleType: updatedBooking.vehicle_type,
+        vehicleNumber: updatedBooking.vehicle_number,
+        status: 'cancelled',
+        tokenNumber: updatedBooking.token_number,
+        qrCodeData: updatedBooking.qr_code_data,
+        notes: updatedBooking.notes,
+        createdAt: updatedBooking.created_at,
+        updatedAt: updatedBooking.updated_at,
+      }
+    }
+
+    return localStore.cancelBooking(bookingId)
   }
 
   /**

@@ -1,4 +1,5 @@
 import React, { useState } from 'react'
+import { api } from '@/services/api'
 import type { Booking, QueueEntry, QueueStage } from '@/types/procurement.types'
 import { TokenQRPass } from '@/components/qr/TokenQRPass'
 import { Card } from '@/components/ui/Card'
@@ -17,12 +18,15 @@ import {
   PackageCheck,
   MapPin,
   Activity,
+  XCircle,
+  Loader2,
 } from 'lucide-react'
 
 interface MyTokensViewProps {
   bookings: Booking[]
   queueEntries: QueueEntry[]
   onBookNewSlot: () => void
+  onRefresh?: () => void | Promise<void>
 }
 
 const TRACKING_STAGES: {
@@ -301,8 +305,34 @@ export const MyTokensView: React.FC<MyTokensViewProps> = ({
   bookings,
   queueEntries,
   onBookNewSlot,
+  onRefresh,
 }) => {
   const [expandedBookingId, setExpandedBookingId] = useState<string>('')
+  const [confirmCancelBookingId, setConfirmCancelBookingId] = useState<string>('')
+  const [cancellingBookingId, setCancellingBookingId] = useState<string>('')
+  const [cancelError, setCancelError] = useState<string>('')
+
+  const handleCancelBooking = async (booking: Booking) => {
+    if (cancellingBookingId) return
+
+    setCancellingBookingId(booking.id)
+    setCancelError('')
+
+    try {
+      await api.cancelBooking(booking.id)
+      setConfirmCancelBookingId('')
+      setExpandedBookingId('')
+      await onRefresh?.()
+    } catch (error) {
+      setCancelError(
+        error instanceof Error
+          ? error.message
+          : 'Unable to cancel this booking right now.'
+      )
+    } finally {
+      setCancellingBookingId('')
+    }
+  }
 
   if (bookings.length === 0) {
     return (
@@ -364,6 +394,18 @@ export const MyTokensView: React.FC<MyTokensViewProps> = ({
             (q) => q.bookingId === booking.id
           )
 
+          const canCancel =
+            booking.status === 'pending' ||
+            (
+              (booking.status === 'confirmed' || booking.status === 'called') &&
+              !!queueEntry &&
+              (queueEntry.currentStage === 'waiting' ||
+                queueEntry.currentStage === 'called_to_gate')
+            )
+
+          const isCancelling = cancellingBookingId === booking.id
+          const isConfirmingCancel = confirmCancelBookingId === booking.id
+
           const currentStage =
             queueEntry?.currentStage || 'waiting'
 
@@ -384,7 +426,7 @@ export const MyTokensView: React.FC<MyTokensViewProps> = ({
                   <div className="min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-mono text-base font-black text-slate-900">
-                        {booking.tokenNumber}
+                        {booking.tokenNumber || booking.bookingNumber}
                       </span>
 
                       <StatusPill
@@ -413,6 +455,65 @@ export const MyTokensView: React.FC<MyTokensViewProps> = ({
                         </span>
                       )}
                     </div>
+
+                    {canCancel && (
+                      <div className="mt-3">
+                        {!isConfirmingCancel ? (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setCancelError('')
+                              setConfirmCancelBookingId(booking.id)
+                            }}
+                            disabled={!!cancellingBookingId}
+                            className="inline-flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2 text-xs font-black text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            <XCircle className="w-4 h-4" />
+                            {booking.status === 'pending' ? 'Cancel Request' : 'Cancel Booking'}
+                          </button>
+                        ) : (
+                          <div className="rounded-2xl border border-rose-200 bg-rose-50 p-3">
+                            <p className="text-xs font-black text-rose-900">
+                              Cancel this booking?
+                            </p>
+                            <p className="text-[11px] leading-5 text-rose-800/80 mt-1">
+                              {booking.status === 'pending'
+                                ? 'Your pending request will be withdrawn.'
+                                : 'The booking will be cancelled and its reserved slot will be released.'}
+                              Gate-checked bookings cannot be cancelled.
+                            </p>
+
+                            <div className="flex items-center gap-2 mt-3">
+                              <button
+                                type="button"
+                                onClick={() => setConfirmCancelBookingId('')}
+                                disabled={isCancelling}
+                                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                              >
+                                Keep Booking
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleCancelBooking(booking)}
+                                disabled={isCancelling}
+                                className="inline-flex items-center gap-2 rounded-xl bg-rose-600 px-3 py-2 text-xs font-black text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-70"
+                              >
+                                {isCancelling && (
+                                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                )}
+                                {isCancelling ? 'Cancelling...' : 'Yes, Cancel'}
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        {cancelError && (
+                          <p className="mt-2 text-[11px] font-semibold text-rose-700">
+                            {cancelError}
+                          </p>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   <div className="shrink-0">
@@ -435,7 +536,7 @@ export const MyTokensView: React.FC<MyTokensViewProps> = ({
                 </div>
 
                 {/* Live Queue Status */}
-                {queueEntry && booking.status !== 'completed' && (
+                {queueEntry && booking.status !== 'completed' && booking.status !== 'cancelled' && (
                   <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
                     {(() => {
                       const liveStatus = getLiveQueueStatus(
@@ -552,7 +653,7 @@ export const MyTokensView: React.FC<MyTokensViewProps> = ({
                 )}
 
                 {/* Smart Arrival */}
-                {queueEntry && booking.status !== 'completed' && (
+                {queueEntry && booking.status !== 'completed' && booking.status !== 'cancelled' && (
                   <div className="mt-4 rounded-2xl border border-emerald-200 bg-gradient-to-br from-emerald-50 to-white p-4">
                     {(() => {
                       const estimatedWait = Math.max(
@@ -660,7 +761,7 @@ export const MyTokensView: React.FC<MyTokensViewProps> = ({
                 )}
 
                 {/* Smart Arrival Guidance */}
-                {booking.status !== 'completed' && (
+                {booking.status !== 'completed' && booking.status !== 'cancelled' && (
                   <div className="mt-3">
                     {(() => {
                       const guidance = getArrivalGuidance(
@@ -706,31 +807,51 @@ export const MyTokensView: React.FC<MyTokensViewProps> = ({
                   </div>
                 )}
 
-                {/* Track button */}
-                <button
-                  type="button"
-                  onClick={() =>
-                    setExpandedBookingId(
-                      isExpanded ? '' : booking.id
-                    )
-                  }
-                  className={`w-full mt-4 rounded-xl px-4 py-3 flex items-center justify-between text-sm font-bold transition ${
-                    isExpanded
-                      ? 'bg-emerald-800 text-white'
-                      : 'bg-emerald-50 text-emerald-800 border border-emerald-200 hover:bg-emerald-100'
-                  }`}
-                >
-                  <span className="flex items-center gap-2">
-                    <MapPin className="w-4 h-4" />
-                    {isExpanded ? 'Hide Tracking' : 'Track Procurement'}
-                  </span>
+                {booking.status === 'cancelled' && (
+                  <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 p-4">
+                    <div className="flex items-start gap-3">
+                      <div className="w-9 h-9 rounded-xl bg-white text-rose-600 flex items-center justify-center shrink-0">
+                        <XCircle className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-black text-rose-900">
+                          Booking cancelled
+                        </p>
+                        <p className="text-xs text-rose-800/80 mt-1 leading-relaxed">
+                          This booking is no longer active. Its QR pass has been deactivated and the reserved slot has been released.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
-                  {isExpanded ? (
-                    <ChevronUp className="w-4 h-4" />
-                  ) : (
-                    <ChevronDown className="w-4 h-4" />
-                  )}
-                </button>
+                {/* Track button */}
+                {queueEntry && booking.status !== 'cancelled' && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setExpandedBookingId(
+                        isExpanded ? '' : booking.id
+                      )
+                    }
+                    className={`w-full mt-4 rounded-xl px-4 py-3 flex items-center justify-between text-sm font-bold transition ${
+                      isExpanded
+                        ? 'bg-emerald-800 text-white'
+                        : 'bg-emerald-50 text-emerald-800 border border-emerald-200 hover:bg-emerald-100'
+                    }`}
+                  >
+                    <span className="flex items-center gap-2">
+                      <MapPin className="w-4 h-4" />
+                      {isExpanded ? 'Hide Tracking' : 'Track Procurement'}
+                    </span>
+
+                    {isExpanded ? (
+                      <ChevronUp className="w-4 h-4" />
+                    ) : (
+                      <ChevronDown className="w-4 h-4" />
+                    )}
+                  </button>
+                )}
               </div>
 
               {/* Live tracking */}
