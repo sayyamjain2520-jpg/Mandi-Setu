@@ -127,7 +127,6 @@ export const QCInspectionModal: React.FC<QCInspectionModalProps> = ({
     total: totalImpurities <= limits.maxTotalImpurities,
   }), [moistureValue, foreignValue, damagedValue, otherValue, totalImpurities, limits])
 
-  const hasOutOfLimitParameter = Object.values(checks).some((value) => !value)
 
   // Inspection result is automatic: total impurities at or below 5% pass;
   // anything above 5% fails. The operator cannot manually override it.
