@@ -147,7 +147,7 @@ export const FarmerHome: React.FC<FarmerHomeProps> = ({
           <div className="mt-5 grid gap-5 lg:grid-cols-[1.45fr_0.75fr] lg:items-end">
             <div>
               <h1 className="mt-4 text-3xl font-black leading-tight tracking-tight text-white sm:text-5xl">
-                Namaste, {user?.fullName || 'Kisan Mitra'} 👋
+                Namaste, {user?.fullName || 'Kisan Mitra'} 
               </h1>
 
               <p className="mt-3 max-w-2xl text-xs leading-6 text-emerald-50/80 sm:text-sm">
